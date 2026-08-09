@@ -31,7 +31,18 @@ patch that lands you in the coach's office, the midnight phone call, your debut
 in the show. Choices shape your ratings and your reputation.
 
 Between starts you spend XP earned on the mound: train ratings, sharpen the
-pitches you have, learn new ones.
+pitches you have, learn new ones. Your club plays four games between each of
+your starts, so there is a real pennant race around you — the hub tells you how
+many back you are and how many starts are left to do something about it.
+
+**Reputation** runs on two axes. The clubhouse cares whether you are easy to be
+around; the fans and front office care whether you are worth the ticket. How you
+answer a coach in a slump or a reporter after a gem moves both, and they feed
+back into your draft stock, how fast you develop, and how long a leash you get.
+
+**Saves** live in the browser, so the League tab also gives you a save code:
+copy it somewhere safe and paste it into any other browser to carry the career
+across devices.
 
 **Exhibition mode** is a quick three-inning outing with a stock arsenal.
 
@@ -61,7 +72,7 @@ lead your bullpen holds (after five full innings) and the win is yours.
 ## Why the hitter is the whole game
 
 Before every pitch the batter builds a *guess* — a weighted expectation over
-your actual arsenal plus a lean toward part of the plate. Four things move it,
+your actual arsenal plus a lean toward part of the plate. Five things move it,
 all controlled by you:
 
 - **Sequencing memory.** Every pitch raises his weight on that pitch, recent
@@ -76,6 +87,24 @@ all controlled by you:
   its own tunnel: nothing to read, including by you — its break re-rolls every
   throw.
 - **Location memory.** He tracks where you've been living and leans that way.
+- **Times through the order.** Every hitter keeps his own book on you across the
+  whole game. The more of you he has seen, the better he recalls earlier at-bats,
+  the less your deception is worth, the fewer bats you miss, and the harder he
+  squares you up. The third time through is the hardest part of a start — the
+  batter card shows which look he is on and how warm he is. The knuckleball is
+  exempt, because there is nothing to learn about it.
+
+## Leverage
+
+Runners on base do not change the strike zone, but they change everything about
+how it feels to throw into it. Runners, the inning, the score and the out count
+feed one pressure term that narrows the meter's forgiving window, quickens the
+bar, and charges extra stamina per pitch — so a long jam in the sixth costs more
+arm than a 1-2-3 inning of the same length. Hitters get more aggressive with men
+in scoring position.
+
+Composure is the only rating that fights it: a 99-composure arm feels well under
+half of what a 25 feels in the same bases-loaded spot.
 
 ## Execution and fatigue
 
@@ -95,21 +124,30 @@ src/engine/        pure TypeScript, no React — fully testable
   player.ts        create-a-pitcher: archetypes, ratings, grades, XP economy
   opponents.ts     lineup generation by level of ball
   batterAI.ts      the guess model, deception, swing decisions
+  pressure.ts      leverage, and how much of it a pitcher feels
   resolve.ts       execution, whiffs, contact
   game.ts          inning state machine and base running
 src/career/        career mode, also engine-pure
   teams.ts         invented colleges and the Federal Baseball League
   story.ts         story beats as serializable data
-  career.ts        the fork, seasons, draft, promotion, saves
+  career.ts        the fork, seasons, draft, promotion, saves, save codes
   sim.ts           run support, bullpen, pitcher decisions, XP
+  standings.ts     the pennant race around your starts
+  reputation.ts    clubhouse and fame, and what they buy
 src/ui/            React + one canvas
-  Stage.tsx        the broadcast camera and ball flight
+  Stage.tsx        the broadcast camera, ball flight, swings, balls in play
+  sound.ts         synthesized audio — no assets
+  meterMath.ts     the meter's motion, split out so its timing edges are tested
   GameDay.tsx      a full start, inning by inning
   screens/         menu, create-a-pitcher, hub, story player
 ```
 
 The engine never imports React and never mutates state; careers save to
-localStorage as plain JSON after every change.
+localStorage as plain JSON after every change, and old saves are migrated
+forward rather than dropped.
+
+It plays on a phone: the stage measures itself, the arsenal becomes a two-column
+rail of thumb-sized buttons, and the meter grows a bigger target.
 
 ## Coordinates
 

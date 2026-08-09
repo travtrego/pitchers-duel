@@ -15,6 +15,8 @@ export interface SceneEffects {
   xp?: number;
   ratings?: Partial<Ratings>;
   flags?: Record<string, string | number | boolean>;
+  /** Moves the clubhouse and fame meters. */
+  rep?: { clubhouse?: number; fame?: number };
 }
 
 export type SceneAction =
@@ -108,13 +110,13 @@ export const SCENES: Record<string, Scene> = {
       {
         label: '“Right at them. Fastballs early.”',
         response: '“Fine by me. Just remember — the third time they see it, it better be somewhere new.”',
-        effects: { xp: 15, flags: { approach: 'attack' } },
+        effects: { xp: 15, flags: { approach: 'attack' }, rep: { fame: 3 } },
         action: { type: 'continue' },
       },
       {
         label: '“Keep them guessing from pitch one.”',
         response: '“A kid after my own heart. Don’t get cute in fastball counts, that’s all I ask.”',
-        effects: { xp: 15, flags: { approach: 'mix' } },
+        effects: { xp: 15, flags: { approach: 'mix' }, rep: { clubhouse: 3 } },
         action: { type: 'continue' },
       },
     ],
@@ -131,19 +133,19 @@ export const SCENES: Record<string, Scene> = {
       {
         label: 'Extra bullpen sessions',
         response: '“Good. Command is a callus. You build it by gripping a baseball until your hand remembers.”',
-        effects: { ratings: { command: 2 } },
+        effects: { ratings: { command: 2 }, rep: { clubhouse: 4 } },
         action: { type: 'continue' },
       },
       {
         label: 'Live in the film room',
         response: '“Smart. Watch their hands, not the highlights. Hitters tell you what they’re afraid of if you watch long enough.”',
-        effects: { ratings: { composure: 2 } },
+        effects: { ratings: { composure: 2 }, rep: { clubhouse: 3 } },
         action: { type: 'continue' },
       },
       {
         label: '“I’m fine. Ball’s just finding holes.”',
         response: '“...That’s either veteran poise or teenage denial, and I genuinely cannot tell which. Get out of my office.”',
-        effects: { xp: 25, flags: { swagger: true } },
+        effects: { xp: 25, flags: { swagger: true }, rep: { clubhouse: -12, fame: 6 } },
         action: { type: 'continue' },
       },
     ],
@@ -160,13 +162,13 @@ export const SCENES: Record<string, Scene> = {
       {
         label: '“I set that up three pitches early.”',
         response: 'She raises an eyebrow, writing. “Eighteen going on Greg-whoever. Nice outing, kid.”',
-        effects: { xp: 40 },
+        effects: { xp: 40, rep: { clubhouse: -6, fame: 14 } },
         action: { type: 'continue' },
       },
       {
         label: '“Honestly? Catcher called it. I just threw it.”',
         response: 'Down the hall, your catcher yells “FINALLY, SOME CREDIT.” The beat writers love you already.',
-        effects: { xp: 40, flags: { humble: true } },
+        effects: { xp: 40, flags: { humble: true }, rep: { clubhouse: 16, fame: 5 } },
         action: { type: 'continue' },
       },
     ],
@@ -180,7 +182,7 @@ export const SCENES: Record<string, Scene> = {
       { speaker: 'MANAGER', text: 'Pack light. Triple-A hitters don’t miss the mistake pitch — ever. But the org thinks you’re done learning what this level can teach you. So do I.' },
     ],
     choices: [
-      { label: 'Shake his hand', effects: { xp: 50 }, action: { type: 'continue' } },
+      { label: 'Shake his hand', effects: { xp: 50, rep: { fame: 8 } }, action: { type: 'continue' } },
     ],
   },
 
@@ -195,7 +197,7 @@ export const SCENES: Record<string, Scene> = {
       { speaker: 'MOM', text: '...I KNEW IT. I’m booking flights. Don’t you dare pitch scared, baby.' },
     ],
     choices: [
-      { label: 'Try to sleep. Fail.', effects: { xp: 75 }, action: { type: 'continue' } },
+      { label: 'Try to sleep. Fail.', effects: { xp: 75, rep: { fame: 18 } }, action: { type: 'continue' } },
     ],
   },
 
@@ -211,13 +213,13 @@ export const SCENES: Record<string, Scene> = {
       {
         label: '“First pitch, best fastball. Let’s find out.”',
         response: 'He grins behind the mask. “Correct answer. Welcome to the show.”',
-        effects: { xp: 25 },
+        effects: { xp: 25, rep: { fame: 8 } },
         action: { type: 'continue' },
       },
       {
         label: '“Something soft. Let’s be rude about it.”',
         response: 'He laughs out loud. “Cold-blooded. I’m gonna enjoy catching you.”',
-        effects: { xp: 25, flags: { swagger: true } },
+        effects: { xp: 25, flags: { swagger: true }, rep: { clubhouse: -4, fame: 12 } },
         action: { type: 'continue' },
       },
     ],
@@ -232,7 +234,7 @@ export const SCENES: Record<string, Scene> = {
       { speaker: 'COACH', text: 'Enjoy it for exactly one evening. Then remember every hitter in the league just spent their winter watching film of you.' },
     ],
     choices: [
-      { label: 'One evening, then', effects: { xp: 100 }, action: { type: 'continue' } },
+      { label: 'One evening, then', effects: { xp: 100, rep: { fame: 25 } }, action: { type: 'continue' } },
     ],
   },
 };

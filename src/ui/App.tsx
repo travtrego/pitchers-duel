@@ -4,6 +4,7 @@ import {
   clearCareer,
   getScene,
   loadCareer,
+  migrate,
   newCareer,
   recordStart,
   saveCareer,
@@ -142,6 +143,10 @@ export function App() {
         onContinue={() => setScreen('career')}
         onNewCareer={() => setScreen('create')}
         onExhibition={() => setScreen('exhibition')}
+        onImport={(cs) => {
+          setCareer(migrate(cs));
+          setScreen('career');
+        }}
       />
     );
   }

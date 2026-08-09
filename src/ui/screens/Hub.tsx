@@ -1,5 +1,13 @@
 import { useState } from 'react';
-import { levelLabel, teamName, type CareerState } from '../../career/career';
+import {
+  exportCode,
+  levelLabel,
+  seasonRace,
+  teamName,
+  type CareerState,
+} from '../../career/career';
+import { CLUBHOUSE_LABEL, clubhouseTier, fameLabel } from '../../career/reputation';
+import { table, winPct } from '../../career/standings';
 import { era, ipDisplay, kPerNine } from '../../career/sim';
 import { PITCH_CATALOG, getCatalogPitch } from '../../engine/pitchCatalog';
 import {
@@ -30,7 +38,8 @@ const RATING_LABELS: [keyof Ratings, string][] = [
 ];
 
 export function Hub({ career, onPlayNext, onTrain, onUpgradePitch, onLearnPitch, onQuitToMenu }: Props) {
-  const [tab, setTab] = useState<'season' | 'develop' | 'history'>('season');
+  const [tab, setTab] = useState<'season' | 'develop' | 'league' | 'history'>('season');
+  const [code, setCode] = useState<string | null>(null);
   const cs = career;
   const nextGame = cs.schedule[cs.startIndex];
   const labCollege =
@@ -73,6 +82,7 @@ export function Hub({ career, onPlayNext, onTrain, onUpgradePitch, onLearnPitch,
           <div>
             <div className="panel-title">NEXT START — GAME {cs.startIndex + 1} OF {cs.schedule.length}</div>
             <div className="next-opp">vs {nextGame.opponent}</div>
+            <div className="race-note">{seasonRace(cs)}</div>
           </div>
           <button className="primary-btn" onClick={onPlayNext}>
             Take the ball
@@ -81,9 +91,15 @@ export function Hub({ career, onPlayNext, onTrain, onUpgradePitch, onLearnPitch,
       )}
 
       <nav className="hub-tabs">
-        {(['season', 'develop', 'history'] as const).map((t) => (
+        {(['season', 'develop', 'league', 'history'] as const).map((t) => (
           <button key={t} className={tab === t ? 'tab-on' : ''} onClick={() => setTab(t)}>
-            {t === 'season' ? 'Game log' : t === 'develop' ? 'Development' : 'Career'}
+            {t === 'season'
+              ? 'Game log'
+              : t === 'develop'
+                ? 'Development'
+                : t === 'league'
+                  ? 'League'
+                  : 'Career'}
           </button>
         ))}
       </nav>
@@ -192,6 +208,91 @@ export function Hub({ career, onPlayNext, onTrain, onUpgradePitch, onLearnPitch,
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {tab === 'league' && (
+        <div className="develop">
+          <div className="panel">
+            <div className="panel-title">STANDINGS</div>
+            {cs.standings.rivals.length === 0 ? (
+              <div className="log-empty">The league table opens with the season.</div>
+            ) : (
+              <table className="stat-table">
+                <thead>
+                  <tr>
+                    <th>Club</th><th>W</th><th>L</th><th>PCT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {table(cs.standings, teamName(cs)).map((r) => (
+                    <tr key={r.name} className={r.isYou ? 'row-you' : ''}>
+                      <td>{r.name}</td>
+                      <td>{r.wins}</td>
+                      <td>{r.losses}</td>
+                      <td>{winPct(r.wins, r.losses).toFixed(3).replace(/^0/, '')}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="panel">
+            <div className="panel-title">REPUTATION</div>
+            <div className="dev-row">
+              <span className="dev-label">Clubhouse</span>
+              <span className="rating-bar dev-bar">
+                <span
+                  className="rating-fill"
+                  style={{
+                    width: `${(cs.reputation.clubhouse + 100) / 2}%`,
+                    background: cs.reputation.clubhouse < 0 ? '#e8503a' : '#4fb477',
+                  }}
+                />
+              </span>
+              <b className="dev-val">{cs.reputation.clubhouse}</b>
+            </div>
+            <div className="dev-row">
+              <span className="dev-label">Fame</span>
+              <span className="rating-bar dev-bar">
+                <span
+                  className="rating-fill"
+                  style={{ width: `${(cs.reputation.fame + 100) / 2}%`, background: '#e8b23a' }}
+                />
+              </span>
+              <b className="dev-val">{cs.reputation.fame}</b>
+            </div>
+            <div className="rep-labels">
+              <span>{CLUBHOUSE_LABEL[clubhouseTier(cs.reputation)]}</span>
+              <span>·</span>
+              <span>{fameLabel(cs.reputation)}</span>
+            </div>
+            <div className="dev-note">
+              How you answer coaches and reporters moves these. The room decides your leash in a
+              slump; fame moves your draft stock and how fast the org calls.
+            </div>
+
+            <div className="panel-title dev-learn-title">SAVE CODE</div>
+            <div className="dev-note">
+              Your career lives in this browser. Copy this somewhere safe to carry it to another
+              device — or back it up before clearing site data.
+            </div>
+            <div className="save-actions">
+              <button className="ghost-btn" onClick={() => setCode(exportCode(cs))}>
+                Show save code
+              </button>
+              {code && (
+                <button
+                  className="ghost-btn"
+                  onClick={() => void navigator.clipboard?.writeText(code)}
+                >
+                  Copy
+                </button>
+              )}
+            </div>
+            {code && <textarea className="save-code" readOnly value={code} rows={4} />}
           </div>
         </div>
       )}

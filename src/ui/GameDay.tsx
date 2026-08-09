@@ -63,6 +63,21 @@ export function GameDay(props: Props) {
   const [final, setFinal] = useState<GameDayResult | null>(null);
   const arrivedRef = useRef<ThrowResult | null>(null);
 
+  // The stage is a canvas, so it cannot size itself with CSS — it has to be
+  // measured. Keeps the 11:9 shot intact on a phone without overflowing.
+  const stageWrapRef = useRef<HTMLDivElement>(null);
+  const [stageSize, setStageSize] = useState({ w: 660, h: 540 });
+  useEffect(() => {
+    const measure = () => {
+      const avail = stageWrapRef.current?.parentElement?.clientWidth ?? 660;
+      const w = Math.max(280, Math.min(660, avail));
+      setStageSize({ w, h: Math.round(w * (540 / 660)) });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+
   const offLambda = useMemo(() => offenseLambda(teamStrength, oppQuality), [teamStrength, oppQuality]);
   const penLambda = useMemo(() => bullpenLambda(teamStrength, oppQuality), [teamStrength, oppQuality]);
 
@@ -273,8 +288,10 @@ export function GameDay(props: Props) {
         </aside>
 
         <section className="gd-center">
-          <div className="stage-wrap">
+          <div className="stage-wrap" ref={stageWrapRef}>
             <Stage
+              width={stageSize.w}
+              height={stageSize.h}
               throws={throws}
               batter={batter}
               flight={flight}
