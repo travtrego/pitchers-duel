@@ -1,4 +1,5 @@
-import type { Batter, Guess, Loc, MemoryEntry, PitchType } from './types';
+import type { Batter, Guess, Loc, MemoryEntry, PitchType, Situation } from './types';
+import { CALM } from './pressure';
 import { clamp01, strikeLook } from './zone';
 
 /**
@@ -55,6 +56,7 @@ export function computeGuess(
   balls: number,
   strikes: number,
   arsenal: PitchType[],
+  situation: Situation = CALM,
 ): Guess {
   const weights: Record<string, number> = {};
   const lean = fastballLean(balls, strikes);
@@ -69,19 +71,36 @@ export function computeGuess(
     weights[p.id] = Math.max(0.01, base);
   }
 
-  // Sequencing memory: recent pitches pull the hitter's expectation toward them.
-  const recent = memory.slice(-8);
+  // This hitter's own book on you: everything he has personally seen tonight,
+  // most recent first. What the guy ahead of him saw barely registers.
+  const mine = memory.filter((m) => m.batterId === batter.id);
+  const own = mine.slice(-10);
+  const timesFaced = situation.timesThroughOrder;
+  // Both the pitches he has seen and the trips he has taken feed the book.
+  const familiarity = clamp01(mine.length / 16 + (timesFaced - 1) * 0.2);
+
+  // A hitter who has already seen you twice recalls the earlier looks far
+  // better than one seeing you for the first time. This is the third time
+  // through the order, and it is the hardest part of a start.
+  const priorRecall = 0.3 + familiarity * 0.55;
+
   let leanX = 0;
   let leanY = 0;
   let leanTotal = 0;
-  for (let i = 0; i < recent.length; i++) {
-    const entry = recent[i];
-    const recency = Math.pow(0.76, recent.length - 1 - i);
-    const w = (entry.thisPlateAppearance ? 1 : 0.32) * recency;
+  for (let i = 0; i < own.length; i++) {
+    const entry = own[i];
+    const recency = Math.pow(0.78, own.length - 1 - i);
+    const w = (entry.thisPlateAppearance ? 1 : priorRecall) * recency;
     weights[entry.pitchId] = (weights[entry.pitchId] ?? 0.01) + w * 0.34;
     leanX += entry.loc.x * w;
     leanY += entry.loc.y * w;
     leanTotal += w;
+  }
+
+  // Watching from the dugout is worth something, but not much.
+  for (const entry of memory.slice(-6)) {
+    if (entry.batterId === batter.id) continue;
+    weights[entry.pitchId] = (weights[entry.pitchId] ?? 0.01) + 0.05;
   }
 
   const total = Object.values(weights).reduce((a, b) => a + b, 0);
@@ -96,8 +115,11 @@ export function computeGuess(
     expectedVelo += (1 - covered) * avg;
   }
 
+  // Men in scoring position turn a hitter into an RBI hunter: quicker to
+  // pull the trigger on anything he can drive.
+  const rbiHunt = situation.risp ? 1.08 : 1;
   const aggression = clamp01(
-    zoneSwingRate(balls, strikes) * (0.7 + 0.6 * batter.aggression),
+    zoneSwingRate(balls, strikes) * (0.7 + 0.6 * batter.aggression) * rbiHunt,
   );
 
   return {
@@ -105,6 +127,8 @@ export function computeGuess(
     zoneLean: leanTotal > 0 ? { x: leanX / leanTotal, y: leanY / leanTotal } : { x: 0, y: 0 },
     aggression,
     expectedVelo,
+    familiarity,
+    timesFaced,
   };
 }
 
@@ -136,8 +160,15 @@ export function computeDeception(
   const veloSurprise = clamp01(Math.abs(guess.expectedVelo - actualVelo) / 14);
   const recognition = 0.55 + 0.45 * (1 - batter.contact);
 
+  // Deception is a wasting asset. The more of you a hitter has seen tonight,
+  // the earlier he picks the ball up — a knuckleball being the exception,
+  // since there is nothing to learn about it.
+  const seenItAll = thrown.flutter ? 1 : 1 - guess.familiarity * 0.45;
+
   const flutterBonus = thrown.flutter ? 0.25 : 0;
-  return clamp01(((surprise * 0.7 + veloSurprise * 0.5) * tunnelFactor + flutterBonus) * recognition);
+  return clamp01(
+    ((surprise * 0.7 + veloSurprise * 0.5) * tunnelFactor + flutterBonus) * recognition * seenItAll,
+  );
 }
 
 /** Probability the hitter offers at this pitch. */

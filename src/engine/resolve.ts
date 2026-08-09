@@ -99,13 +99,16 @@ export function whiffProbability(
   batter: Batter,
   pitch: PitchType,
   timing: number,
+  familiarity = 0,
 ): number {
   const locDifficulty = 1 - heartQuality(exec.actual);
   let p =
     pitch.whiff *
     (0.3 + 0.78 * timing) *
     (0.45 + 0.75 * locDifficulty) *
-    (1.2 - batter.contact * 0.62);
+    (1.2 - batter.contact * 0.62) *
+    // Swings and misses dry up as a hitter gets his third look at you.
+    (1 - familiarity * 0.22);
   if (!exec.inZone) p *= 1.3;
   if (exec.hung) p *= 0.45;
   return clamp(p, 0.02, 0.85);
@@ -118,11 +121,14 @@ export function resolveContact(
   pitch: PitchType,
   timing: number,
   rng: Rng,
+  familiarity = 0,
 ): ContactResult {
   let quality =
     (0.42 + 0.5 * batter.contact) *
     (1 - timing * 0.72) *
-    (0.45 + 0.62 * heartQuality(exec.actual));
+    (0.45 + 0.62 * heartQuality(exec.actual)) *
+    // A hitter on his third look is timing you, not reacting to you.
+    (1 + familiarity * 0.16);
   if (exec.hung) quality *= 1.35;
   quality = clamp01(quality + rng.normal() * 0.09);
 

@@ -18,6 +18,8 @@ interface Props {
   pitch: PitchType;
   /** 0..1. A tired arm makes both windows narrower and the bar quicker. */
   stamina: number;
+  /** 0..1 composure-adjusted leverage. Squeezes the window, quickens the bar. */
+  pressure?: number;
   onComplete: (result: MeterResult) => void;
 }
 
@@ -29,7 +31,7 @@ interface Props {
  * hangs the pitch; missing the accuracy line sprays it, and which side you miss
  * on decides which way it runs.
  */
-export function Meter({ pitch, stamina, onComplete }: Props) {
+export function Meter({ pitch, stamina, pressure = 0, onComplete }: Props) {
   const [phase, setPhase] = useState<Phase>('idle');
   const [value, setValue] = useState(0);
   const [powerStop, setPowerStop] = useState<number | null>(null);
@@ -43,9 +45,9 @@ export function Meter({ pitch, stamina, onComplete }: Props) {
 
   phaseRef.current = phase;
 
-  const speed = meterSpeed(pitch.controlDifficulty, stamina);
-  // Fatigue shrinks the forgiving windows on both stops.
-  const accWindow = accuracyWindow(pitch.accuracyWindow, stamina);
+  const speed = meterSpeed(pitch.controlDifficulty, stamina, pressure);
+  // Fatigue and leverage both shrink the forgiving window.
+  const accWindow = accuracyWindow(pitch.accuracyWindow, stamina, pressure);
 
   const finish = useCallback(
     (rawAccuracy: number) => {
@@ -115,13 +117,20 @@ export function Meter({ pitch, stamina, onComplete }: Props) {
 
   const label =
     phase === 'idle'
-      ? 'Click or press Space to start your delivery'
+      ? pressure > 0.18
+        ? 'From the stretch — smaller window. Click or Space to start.'
+        : 'Click or press Space to start your delivery'
       : phase === 'power'
         ? 'Stop it at the top for full power'
         : 'Stop it on the line for your spot';
 
   return (
-    <div className="meter" onPointerDown={press} role="button" tabIndex={0}>
+    <div
+      className={`meter ${pressure > 0.18 ? 'meter-pressed' : ''}`}
+      onPointerDown={press}
+      role="button"
+      tabIndex={0}
+    >
       <div className="meter-track">
         <div className="meter-fill" style={{ height: `${value}%`, background: pitch.color }} />
         <div

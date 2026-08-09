@@ -53,14 +53,27 @@ export function stepAccuracy(value: number, speed: number, dt: number): Step {
   return { value: v, direction: -1, bottomedOut: false };
 }
 
-/** Bar speed for a pitch, given its difficulty and how tired the arm is. */
-export function meterSpeed(controlDifficulty: number, stamina: number): number {
-  return BASE_SPEED * (1 + controlDifficulty * 0.45) * (1 + (1 - stamina) * 0.3);
+/**
+ * Bar speed for a pitch, given its difficulty, how tired the arm is, and how
+ * much the moment is squeezing. `pressure` is the composure-adjusted 0..1 from
+ * the engine, so a poised arm barely notices a jam that rattles a nervous one.
+ */
+export function meterSpeed(controlDifficulty: number, stamina: number, pressure = 0): number {
+  return (
+    BASE_SPEED *
+    (1 + controlDifficulty * 0.45) *
+    (1 + (1 - stamina) * 0.3) *
+    (1 + pressure * 0.22)
+  );
 }
 
-/** Forgiving half-width of the accuracy window, shrinking as the arm tires. */
-export function accuracyWindow(base: number, stamina: number): number {
-  return base * (0.55 + 0.45 * stamina);
+/**
+ * Forgiving half-width of the accuracy window. It shrinks as the arm tires and
+ * again with runners on — pitching from the stretch in a jam is genuinely
+ * harder to execute than working an empty inning.
+ */
+export function accuracyWindow(base: number, stamina: number, pressure = 0): number {
+  return base * (0.55 + 0.45 * stamina) * (1 - pressure * 0.38);
 }
 
 /** Convert a power stop into the engine's 0..1 shortfall. */

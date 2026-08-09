@@ -1,6 +1,7 @@
 import { LINEUP } from './batters';
 import { computeDeception, computeGuess, swingProbability } from './batterAI';
 import { ARSENAL } from './pitches';
+import { makeSituation, pressureStaminaScale } from './pressure';
 import {
   executePitch,
   foulProbability,
@@ -22,6 +23,7 @@ import type {
   PitchCall,
   PitchOutcome,
   PitchType,
+  Situation,
 } from './types';
 import { clamp01, umpireCallsStrike } from './zone';
 
@@ -31,6 +33,7 @@ export interface NewGameOptions {
   arsenal?: PitchType[];
   lineup?: Batter[];
   staminaPerPitch?: number;
+  composure?: number;
 }
 
 export function newGame(opts: NewGameOptions = {}): GameState {
@@ -38,6 +41,7 @@ export function newGame(opts: NewGameOptions = {}): GameState {
     arsenal: opts.arsenal ?? ARSENAL,
     lineup: opts.lineup ?? LINEUP,
     staminaPerPitch: opts.staminaPerPitch ?? STAMINA_PER_PITCH,
+    composure: opts.composure ?? 60,
     inning: 1,
     outs: 0,
     balls: 0,
@@ -75,6 +79,28 @@ export function currentBatter(state: GameState): Batter {
   return state.lineup[state.batterIndex % state.lineup.length];
 }
 
+/** Which trip through the order the hitter at the plate is on, 1-based. */
+export function timesThroughOrder(state: GameState): number {
+  return Math.floor(state.batterIndex / state.lineup.length) + 1;
+}
+
+/**
+ * The leverage of this moment. Runs off the pitcher's composure, so the same
+ * bases-loaded jam squeezes two different arms by different amounts.
+ */
+export function currentSituation(state: GameState, runSupport = 0): Situation {
+  return makeSituation(
+    {
+      bases: state.bases,
+      outs: state.outs,
+      inning: state.inning,
+      runDiff: runSupport - state.runs,
+      timesThroughOrder: timesThroughOrder(state),
+    },
+    state.composure,
+  );
+}
+
 export function pitchFrom(state: GameState, id: string): PitchType {
   const p = state.arsenal.find((a) => a.id === id);
   if (!p) throw new Error(`Pitch ${id} is not in this pitcher's arsenal`);
@@ -82,8 +108,15 @@ export function pitchFrom(state: GameState, id: string): PitchType {
 }
 
 /** What the hitter is sitting on right now. Exposed so the UI can hint at it. */
-export function currentGuess(state: GameState): Guess {
-  return computeGuess(currentBatter(state), state.memory, state.balls, state.strikes, state.arsenal);
+export function currentGuess(state: GameState, runSupport = 0): Guess {
+  return computeGuess(
+    currentBatter(state),
+    state.memory,
+    state.balls,
+    state.strikes,
+    state.arsenal,
+    currentSituation(state, runSupport),
+  );
 }
 
 interface BaseAdvance {
@@ -275,7 +308,13 @@ export interface ThrowResult {
   /** Set when this pitch ended the plate appearance. */
   paResult?: 'strikeout' | 'walk' | 'in_play';
   /** Diagnostics the UI can show after the pitch. */
-  debug: { guess: Guess; deception: number; swingProb: number; exec: Execution };
+  debug: {
+    guess: Guess;
+    deception: number;
+    swingProb: number;
+    exec: Execution;
+    situation: Situation;
+  };
 }
 
 /**
@@ -289,10 +328,19 @@ export function throwPitch(
   call: PitchCall,
   meter: MeterResult,
   rng: Rng = makeRng(Date.now()),
+  runSupport = 0,
 ): ThrowResult {
   const batter = currentBatter(state);
   const pitch = pitchFrom(state, call.pitchId);
-  const guess = computeGuess(batter, state.memory, state.balls, state.strikes, state.arsenal);
+  const situation = currentSituation(state, runSupport);
+  const guess = computeGuess(
+    batter,
+    state.memory,
+    state.balls,
+    state.strikes,
+    state.arsenal,
+    situation,
+  );
   const exec = executePitch(pitch, call.aim, meter, state.pitcher, rng);
   const deception = computeDeception(pitch, guess, batter, exec.velo, state.arsenal);
   const swingProb = swingProbability(
@@ -315,11 +363,16 @@ export function throwPitch(
   };
 
   next.pitcher.pitchCount += 1;
-  next.pitcher.stamina = clamp01(1 - next.pitcher.pitchCount * state.staminaPerPitch);
+  // Stress pitches cost more than routine ones, so a long jam in the sixth
+  // takes more out of the arm than a 1-2-3 inning of the same length.
+  next.pitcher.stamina = clamp01(
+    state.pitcher.stamina - state.staminaPerPitch * pressureStaminaScale(situation.effective),
+  );
   next.memory.push({
     pitchId: call.pitchId,
     loc: exec.actual,
     thisPlateAppearance: true,
+    batterId: batter.id,
   });
 
   const swung = rng.chance(swingProb);
@@ -334,10 +387,10 @@ export function throwPitch(
     kind = umpireCallsStrike(exec.actual, rng.next()) ? 'called_strike' : 'ball';
   } else {
     const timing = timingError(exec, guess, batter, deception);
-    if (rng.chance(whiffProbability(exec, batter, pitch, timing))) {
+    if (rng.chance(whiffProbability(exec, batter, pitch, timing, guess.familiarity))) {
       kind = 'swinging_strike';
     } else {
-      contact = resolveContact(exec, batter, pitch, timing, rng);
+      contact = resolveContact(exec, batter, pitch, timing, rng, guess.familiarity);
       if (rng.chance(foulProbability(contact.quality, batter, state.strikes))) {
         kind = 'foul';
       } else {
@@ -422,5 +475,10 @@ export function throwPitch(
   };
   next.log.push(outcome);
 
-  return { state: next, outcome, paResult, debug: { guess, deception, swingProb, exec } };
+  return {
+    state: next,
+    outcome,
+    paResult,
+    debug: { guess, deception, swingProb, exec, situation },
+  };
 }

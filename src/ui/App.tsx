@@ -126,6 +126,7 @@ export function App() {
       maxInnings: 9,
       teamStrength: teamStrength(career),
       oppQuality: next.quality,
+      composure: career.player.ratings.composure,
       seed: seed + 1,
     };
   }, [career, inGame]);
@@ -162,6 +163,7 @@ export function App() {
         maxInnings={3}
         teamStrength={0.6}
         oppQuality={LEVEL_QUALITY.AA}
+        composure={60}
         scout
         seed={Math.floor(Math.random() * 2 ** 31)}
         onComplete={() => setScreen('menu')}

@@ -92,6 +92,20 @@ describe('meter difficulty', () => {
   it('narrows the accuracy window as the arm tires', () => {
     expect(accuracyWindow(0.13, 0.3)).toBeLessThan(accuracyWindow(0.13, 1));
   });
+
+  it('squeezes the window and quickens the bar under pressure', () => {
+    expect(accuracyWindow(0.13, 1, 0.7)).toBeLessThan(accuracyWindow(0.13, 1, 0));
+    expect(meterSpeed(0.18, 1, 0.7)).toBeGreaterThan(meterSpeed(0.18, 1, 0));
+  });
+
+  it('leaves a calm situation exactly as it was', () => {
+    expect(accuracyWindow(0.13, 1, 0)).toBeCloseTo(accuracyWindow(0.13, 1));
+    expect(meterSpeed(0.18, 1, 0)).toBeCloseTo(meterSpeed(0.18, 1));
+  });
+
+  it('keeps the window positive even in the worst possible spot', () => {
+    expect(accuracyWindow(0.085, 0.05, 1)).toBeGreaterThan(0);
+  });
 });
 
 describe('meter output', () => {

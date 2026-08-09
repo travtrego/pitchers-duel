@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { topGuess } from '../engine/batterAI';
-import { currentBatter, currentGuess, newGame, nextInning, throwPitch, type ThrowResult } from '../engine/game';
+import {
+  currentBatter,
+  currentGuess,
+  currentSituation,
+  newGame,
+  nextInning,
+  throwPitch,
+  type ThrowResult,
+} from '../engine/game';
 import { makeRng } from '../engine/rng';
-import type { Batter, GameState, Loc, MeterResult, PitchType } from '../engine/types';
+import type { Batter, GameState, Loc, MeterResult, PitchType, Situation } from '../engine/types';
 import { bullpenLambda, finishGame, offenseLambda, runsInInning, type GameFinish, type StartLine } from '../career/sim';
 import { Meter } from './Meter';
 import { sound } from './sound';
@@ -25,6 +33,8 @@ interface Props {
   /** Own club and opposition quality, for run support and the bullpen. */
   teamStrength: number;
   oppQuality: number;
+  /** The pitcher's poise, 25–99. Decides how much of a jam he feels. */
+  composure: number;
   scout: boolean;
   seed: number;
   onComplete: (result: GameDayResult) => void;
@@ -35,12 +45,12 @@ type Phase = 'pregame' | 'select' | 'meter' | 'flight' | 'result' | 'break' | 'p
 export function GameDay(props: Props) {
   const {
     matchup, opponentName, arsenal, lineup, throws, staminaPerPitch,
-    pitchLimit, maxInnings, teamStrength, oppQuality, scout, seed, onComplete,
+    pitchLimit, maxInnings, teamStrength, oppQuality, composure, scout, seed, onComplete,
   } = props;
 
   const rngRef = useRef(makeRng(seed));
   const [game, setGame] = useState<GameState>(() =>
-    newGame({ arsenal, lineup, staminaPerPitch }),
+    newGame({ arsenal, lineup, staminaPerPitch, composure }),
   );
   const [phase, setPhase] = useState<Phase>('pregame');
   const [pitchId, setPitchId] = useState<string | null>(null);
@@ -57,7 +67,8 @@ export function GameDay(props: Props) {
   const penLambda = useMemo(() => bullpenLambda(teamStrength, oppQuality), [teamStrength, oppQuality]);
 
   const batter = currentBatter(game);
-  const guess = useMemo(() => currentGuess(game), [game]);
+  const situation = useMemo(() => currentSituation(game, usRuns), [game, usRuns]);
+  const guess = useMemo(() => currentGuess(game, usRuns), [game, usRuns]);
   const selected = pitchId ? arsenal.find((p) => p.id === pitchId) ?? null : null;
 
   const usage = useMemo(() => {
@@ -69,11 +80,11 @@ export function GameDay(props: Props) {
   const deliver = useCallback(
     (meter: MeterResult) => {
       if (!pitchId || !aim) return;
-      const res = throwPitch(game, { pitchId, aim }, meter, rngRef.current);
+      const res = throwPitch(game, { pitchId, aim }, meter, rngRef.current, usRuns);
       setPending(res);
       setPhase('flight');
     },
-    [aim, game, pitchId],
+    [aim, game, pitchId, usRuns],
   );
 
   const flight: Flight | null = useMemo(() => {
@@ -222,12 +233,28 @@ export function GameDay(props: Props) {
           opponent={opponentName}
           pitchLimit={pitchLimit}
         />
+        {situation.stretch && (
+          <div className={`leverage ${situation.effective > 0.4 ? 'leverage-hot' : ''}`}>
+            <span className="leverage-label">
+              {situation.risp ? 'RISP · STRETCH' : 'STRETCH'}
+            </span>
+            <span className="leverage-bar">
+              <span className="leverage-fill" style={{ width: `${situation.effective * 100}%` }} />
+            </span>
+          </div>
+        )}
         <MuteButton />
       </div>
 
       <div className="gameday-main">
         <aside className="gd-left">
-          <BatterPanel batter={batter} guess={guess} arsenal={arsenal} scout={scout} />
+          <BatterPanel
+            batter={batter}
+            guess={guess}
+            arsenal={arsenal}
+            scout={scout}
+            situation={situation}
+          />
           <div className="pitch-log panel">
             <div className="panel-title">Pitch log</div>
             <ol>
@@ -355,7 +382,12 @@ export function GameDay(props: Props) {
           </div>
 
           {phase === 'meter' && selected && (
-            <Meter pitch={selected} stamina={game.pitcher.stamina} onComplete={deliver} />
+            <Meter
+              pitch={selected}
+              stamina={game.pitcher.stamina}
+              pressure={situation.effective}
+              onComplete={deliver}
+            />
           )}
         </section>
 
@@ -504,20 +536,37 @@ function shortName(name: string): string {
   return parts[parts.length - 1].slice(0, 10).toUpperCase();
 }
 
+const TTO_LABEL = ['1st look', '2nd look', '3rd look', '4th look'];
+
 function BatterPanel({
-  batter, guess, arsenal, scout,
+  batter, guess, arsenal, scout, situation,
 }: {
   batter: Batter;
   guess: ReturnType<typeof currentGuess>;
   arsenal: PitchType[];
   scout: boolean;
+  situation: Situation;
 }) {
   const sitting = topGuess(guess, arsenal);
+  const tto = Math.min(4, situation.timesThroughOrder);
   return (
     <div className="batter-card panel">
       <div className="batter-head">
         <span className="batter-name">{batter.name}</span>
         <span className="batter-hand">{batter.hand}HB</span>
+      </div>
+      <div className={`tto tto-${tto}`}>
+        <span className="tto-label">{TTO_LABEL[tto - 1]}</span>
+        <span className="tto-bar">
+          <span className="tto-fill" style={{ width: `${guess.familiarity * 100}%` }} />
+        </span>
+        <span className="tto-note">
+          {guess.familiarity > 0.55
+            ? 'has your book'
+            : guess.familiarity > 0.28
+              ? 'picking you up'
+              : 'cold'}
+        </span>
       </div>
       <p className="batter-blurb">{batter.blurb}</p>
       <div className="ratings">

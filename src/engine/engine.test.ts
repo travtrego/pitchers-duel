@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { computeDeception, computeGuess } from './batterAI';
 import { LINEUP } from './batters';
-import { advanceOnHit, newGame, nextInning, throwPitch, walkRunners } from './game';
+import {
+  advanceOnHit,
+  currentSituation,
+  newGame,
+  nextInning,
+  throwPitch,
+  timesThroughOrder,
+  walkRunners,
+} from './game';
 import { ARSENAL, getPitch } from './pitches';
 import { PITCH_CATALOG } from './pitchCatalog';
 import {
@@ -12,7 +20,14 @@ import {
   staminaPerPitch,
 } from './player';
 import { generateLineup } from './opponents';
-import { executePitch } from './resolve';
+import {
+  CALM,
+  effectivePressure,
+  makeSituation,
+  pressureStaminaScale,
+  situationPressure,
+} from './pressure';
+import { executePitch, resolveContact, whiffProbability } from './resolve';
 import { makeRng } from './rng';
 import type { Bases, MemoryEntry, MeterResult, PitcherState } from './types';
 import { isStrike, umpireCallsStrike } from './zone';
@@ -21,12 +36,18 @@ const PERFECT: MeterResult = { powerError: 0, accuracyError: 0 };
 const FRESH: PitcherState = { pitchCount: 0, stamina: 1 };
 const HITTER = LINEUP[2]; // the balanced professional hitter
 
-function memoryOf(pitchId: string, count: number): MemoryEntry[] {
+function memoryOf(pitchId: string, count: number, batterId = HITTER.id): MemoryEntry[] {
   return Array.from({ length: count }, () => ({
     pitchId,
     loc: { x: 1, y: 0 },
     thisPlateAppearance: true,
+    batterId,
   }));
+}
+
+/** A situation on the Nth trip through the order, bases empty. */
+function look(n: number) {
+  return { ...CALM, timesThroughOrder: n };
 }
 
 describe('strike zone', () => {
@@ -188,6 +209,7 @@ describe('batter guess model', () => {
       pitchId: 'FF',
       loc: { x: 2, y: 1 },
       thisPlateAppearance: true,
+      batterId: HITTER.id,
     }));
     expect(computeGuess(HITTER, memory, 1, 1, ARSENAL).zoneLean.x).toBeGreaterThan(1);
   });
@@ -261,6 +283,149 @@ describe('generated lineups', () => {
 
   it('is deterministic for a seed', () => {
     expect(generateLineup(7, 0.5, 'X')[0].name).toBe(generateLineup(7, 0.5, 'X')[0].name);
+  });
+});
+
+describe('times through the order', () => {
+  it('builds a hitter’s book only from pitches he personally saw', () => {
+    const his = computeGuess(HITTER, memoryOf('SL', 5, HITTER.id), 1, 1, ARSENAL);
+    const someoneElses = computeGuess(HITTER, memoryOf('SL', 5, 'other-guy'), 1, 1, ARSENAL);
+    expect(his.typeWeights.SL).toBeGreaterThan(someoneElses.typeWeights.SL);
+  });
+
+  it('climbs familiarity with each trip to the plate', () => {
+    const first = computeGuess(HITTER, [], 0, 0, ARSENAL, look(1));
+    const third = computeGuess(HITTER, [], 0, 0, ARSENAL, look(3));
+    expect(third.familiarity).toBeGreaterThan(first.familiarity);
+    expect(third.timesFaced).toBe(3);
+  });
+
+  it('burns off deception by the third look', () => {
+    const memory = memoryOf('FF', 6);
+    const first = computeGuess(HITTER, memory, 1, 1, ARSENAL, look(1));
+    const third = computeGuess(HITTER, memory, 1, 1, ARSENAL, look(3));
+    expect(computeDeception(getPitch('CH'), third, HITTER, 85, ARSENAL)).toBeLessThan(
+      computeDeception(getPitch('CH'), first, HITTER, 85, ARSENAL),
+    );
+  });
+
+  it('leaves the knuckleball alone — there is nothing to learn', () => {
+    const memory = memoryOf('KN', 6);
+    const arsenal = [getPitch('KN'), getPitch('FF')];
+    const first = computeGuess(HITTER, memory, 1, 1, arsenal, look(1));
+    const third = computeGuess(HITTER, memory, 1, 1, arsenal, look(3));
+    const a = computeDeception(getPitch('KN'), first, HITTER, 76, arsenal);
+    const b = computeDeception(getPitch('KN'), third, HITTER, 76, arsenal);
+    expect(b).toBeCloseTo(a, 5);
+  });
+
+  it('dries up whiffs and sharpens contact as familiarity grows', () => {
+    const exec = executePitch(getPitch('SL'), { x: 1.2, y: -1.2 }, PERFECT, FRESH, makeRng(2));
+    const cold = whiffProbability(exec, HITTER, getPitch('SL'), 0.5, 0);
+    const known = whiffProbability(exec, HITTER, getPitch('SL'), 0.5, 0.8);
+    expect(known).toBeLessThan(cold);
+
+    const coldQ = resolveContact(exec, HITTER, getPitch('SL'), 0.5, makeRng(9), 0).quality;
+    const knownQ = resolveContact(exec, HITTER, getPitch('SL'), 0.5, makeRng(9), 0.8).quality;
+    expect(knownQ).toBeGreaterThan(coldQ);
+  });
+
+  it('counts trips through a real lineup as the order turns over', () => {
+    const state = newGame();
+    expect(timesThroughOrder(state)).toBe(1);
+    expect(timesThroughOrder({ ...state, batterIndex: state.lineup.length })).toBe(2);
+    expect(timesThroughOrder({ ...state, batterIndex: state.lineup.length * 2 })).toBe(3);
+  });
+
+  it('tags every pitch in memory with who was in the box', () => {
+    const rng = makeRng(6);
+    let s = newGame();
+    for (let i = 0; i < 10 && !s.inningOver; i++) {
+      s = throwPitch(s, { pitchId: 'FF', aim: { x: 0, y: 0 } }, PERFECT, rng).state;
+    }
+    expect(s.memory.length).toBeGreaterThan(0);
+    expect(s.memory.every((m) => typeof m.batterId === 'string' && m.batterId.length > 0)).toBe(true);
+  });
+});
+
+describe('pressure', () => {
+  const base = { bases: [false, false, false] as Bases, outs: 1, inning: 1, runDiff: 3, timesThroughOrder: 1 };
+
+  it('is nothing with the bases empty early in a comfortable game', () => {
+    expect(situationPressure(base)).toBeLessThan(0.1);
+  });
+
+  it('climbs with runners, and further the closer they are to scoring', () => {
+    const first = situationPressure({ ...base, bases: [true, false, false] });
+    const third = situationPressure({ ...base, bases: [false, false, true] });
+    const loaded = situationPressure({ ...base, bases: [true, true, true] });
+    expect(third).toBeGreaterThan(first);
+    expect(loaded).toBeGreaterThan(third);
+  });
+
+  it('eases with two outs and tightens with none', () => {
+    const jam = { ...base, bases: [true, true, false] as Bases };
+    expect(situationPressure({ ...jam, outs: 2 })).toBeLessThan(situationPressure({ ...jam, outs: 0 }));
+  });
+
+  it('tightens late in a one-run game and relaxes in a blowout', () => {
+    const jam = { ...base, bases: [false, true, false] as Bases, inning: 8 };
+    expect(situationPressure({ ...jam, runDiff: 1 })).toBeGreaterThan(
+      situationPressure({ ...jam, runDiff: 7 }),
+    );
+  });
+
+  it('lets a poised arm feel far less of the same jam', () => {
+    const raw = situationPressure({ ...base, bases: [true, true, true], outs: 0, inning: 8, runDiff: 1 });
+    expect(effectivePressure(raw, 99)).toBeLessThan(effectivePressure(raw, 25) * 0.55);
+  });
+
+  it('never exceeds its bounds', () => {
+    const worst = situationPressure({ bases: [true, true, true], outs: 0, inning: 9, runDiff: 0, timesThroughOrder: 3 });
+    expect(worst).toBeLessThanOrEqual(1);
+    expect(effectivePressure(worst, 25)).toBeLessThanOrEqual(1);
+  });
+
+  it('flags the stretch and scoring position', () => {
+    const s = makeSituation({ ...base, bases: [true, false, true] }, 60);
+    expect(s.stretch).toBe(true);
+    expect(s.risp).toBe(true);
+    const empty = makeSituation(base, 60);
+    expect(empty.stretch).toBe(false);
+    expect(empty.risp).toBe(false);
+  });
+
+  it('makes hitters more aggressive with men in scoring position', () => {
+    const calm = computeGuess(HITTER, [], 1, 1, ARSENAL, CALM);
+    const risp = computeGuess(HITTER, [], 1, 1, ARSENAL, {
+      ...CALM,
+      risp: true,
+      stretch: true,
+    });
+    expect(risp.aggression).toBeGreaterThan(calm.aggression);
+  });
+
+  it('charges more stamina for stress pitches', () => {
+    expect(pressureStaminaScale(0.8)).toBeGreaterThan(pressureStaminaScale(0));
+  });
+
+  it('drains a jam-filled inning harder than a quiet one', () => {
+    const quiet = newGame({ composure: 60 });
+    const jam = { ...newGame({ composure: 60 }), bases: [true, true, true] as Bases, inning: 8 };
+    const rng1 = makeRng(4);
+    const rng2 = makeRng(4);
+    const afterQuiet = throwPitch(quiet, { pitchId: 'FF', aim: { x: 0, y: 0 } }, PERFECT, rng1).state;
+    const afterJam = throwPitch(jam, { pitchId: 'FF', aim: { x: 0, y: 0 } }, PERFECT, rng2).state;
+    expect(afterJam.pitcher.stamina).toBeLessThan(afterQuiet.pitcher.stamina);
+  });
+
+  it('lets composure show up in the game state', () => {
+    const nervous = newGame({ composure: 25 });
+    const ice = newGame({ composure: 99 });
+    const bases: Bases = [true, true, true];
+    expect(currentSituation({ ...ice, bases, inning: 8 }).effective).toBeLessThan(
+      currentSituation({ ...nervous, bases, inning: 8 }).effective,
+    );
   });
 });
 
