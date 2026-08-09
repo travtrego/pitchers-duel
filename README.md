@@ -1,102 +1,119 @@
 # Pitcher's Duel
 
-A baseball game where you only ever pitch. The hitter is always the computer, and
-the whole game is the argument you have with him: what you throw, where you put
-it, and what he thinks is coming.
+A baseball career game where you only ever pitch. The hitter is always the
+computer, and the whole game is the argument you have with him: what you throw,
+where you put it, and what he thinks is coming.
 
 ```bash
 npm install
 npm run dev      # play at localhost:5173
-npm test         # engine tests
+npm test         # engine + career tests
 npm run build
 ```
 
-## How you play
+## The game
+
+**Career mode** is the heart of it. You build a pitcher — archetype, handedness,
+three starting pitches from a catalog of eighteen — and start the story at your
+parents' kitchen table with a college letter and a pro contract in front of you.
+
+- **Go to college** and pick from three programs, each with a real perk
+  (coaching XP, draft exposure, cheaper pitch development). Three seasons, then
+  draft day.
+- **Sign the contract** and get thrown into Double-A at eighteen.
+
+Either way you climb: AA → AAA → the Federal Baseball League, an invented
+eight-team league (New York Sentinels, Boston Harbormen, Chicago Bluecaps...).
+Every name in the game is fictional — real cities, invented identities.
+
+Written story beats fire at the moments that matter: your first start, a rough
+patch that lands you in the coach's office, the midnight phone call, your debut
+in the show. Choices shape your ratings and your reputation.
+
+Between starts you spend XP earned on the mound: train ratings, sharpen the
+pitches you have, learn new ones.
+
+**Exhibition mode** is a quick three-inning outing with a stock arsenal.
+
+## How a start plays
+
+Broadcast presentation: camera behind the mound, score bug, lower-third result
+banners, a velocity readout on every pitch.
 
 Each pitch is three decisions and one execution:
 
-1. **Pick a pitch** (keys `1`–`5`).
-2. **Pick a spot** on the 5×5 grid. The middle 3×3 is the strike zone; the outer
-   ring is off the plate, where you go hunting for a chase.
-3. **Work the meter** (click or `Space`, three times): start the delivery, stop it
-   at the top for power, then stop it on the line for your location.
+1. **Call your pitch** (number keys).
+2. **Pick your spot** on the zone overlay. The outer ring is off the plate,
+   where you go hunting for a chase.
+3. **Work the meter** (click or `Space`, three times): start the delivery, stop
+   at the top for power, stop on the line for location.
 
-Get through one inning. Three outs and you're done.
+Then the ball actually flies — shrinking away from you toward the plate along
+its real break path. The first stretch of flight follows the no-break line and
+the break arrives late, which is exactly how tunneling works: ghost trails of
+your recent pitches stay on screen, so you can watch a changeup ride the same
+early line as the fastballs that set it up.
+
+You pitch full innings; your team's offense is simmed between frames. At each
+inning break you choose: head back out, or hand it to the pen. Leave with a
+lead your bullpen holds (after five full innings) and the win is yours.
 
 ## Why the hitter is the whole game
 
-The batter isn't a dice roll with a swing animation. Before every pitch he builds
-a *guess* — a weighted expectation over your five pitches plus a lean toward a
-part of the plate. Beating him means throwing something outside that guess.
+Before every pitch the batter builds a *guess* — a weighted expectation over
+your actual arsenal plus a lean toward part of the plate. Four things move it,
+all controlled by you:
 
-Four things move the guess, and all four are things you control:
+- **Sequencing memory.** Every pitch raises his weight on that pitch, recent
+  ones counting most. Throw three straight sliders and the fourth is batting
+  practice.
+- **Count leverage.** He hunts hard stuff at 3-0 and covers spin with two
+  strikes.
+- **Tunneling.** Pitches are grouped by what they look like out of the hand.
+  Fastballs and every fastball-disguised offspeed pitch (change, splitter,
+  forkball...) share a tunnel; a splitter behind heaters is devastating, a
+  curve behind those same heaters is just a different pitch. The knuckleball is
+  its own tunnel: nothing to read, including by you — its break re-rolls every
+  throw.
+- **Location memory.** He tracks where you've been living and leans that way.
 
-- **Sequencing memory.** Every pitch you throw raises his weight on that pitch,
-  with the most recent ones counting most and pitches from earlier at-bats
-  counting a third as much. Throw three straight sliders and the fourth one is a
-  batting-practice fastball to him. This is the mechanic that makes selection a
-  skill instead of a menu.
-- **Count leverage.** He hunts hard stuff when he's ahead (3-0, 2-0) and starts
-  covering spin with two strikes. The same slider is a great idea in one count
-  and a wasted pitch in another.
-- **Tunneling.** Pitches are grouped by what they look like out of the hand. The
-  four-seam, sinker and changeup share a tunnel, so a changeup behind fastballs
-  is genuinely deceptive — while a curveball behind those same fastballs is just
-  a different pitch, because he reads the shape early. Deception is scored as
-  *how wrong he was* × *how well the pitch hid inside what he expected*.
-- **Location memory.** He tracks where you've been living and leans that way, so
-  working one side of the plate all inning has a cost.
+## Execution and fatigue
 
-Turn on **Scout view** to see what he's sitting on. Turn it off when you want the
-real thing.
-
-## Why execution matters
-
-The three-stop meter creates two independent ways to fail, and they fail
-differently:
-
-- **Missing the power stop** leaves the pitch without its break. It drifts back
-  over the middle and sits up — a hung curveball, which the engine flags and the
-  hitter feasts on. A four-seam can't hang; it has no break to lose.
-- **Missing the accuracy stop** sprays the pitch, and *which side you stopped on
-  decides which way it runs*. Stop early and it runs one way, late the other.
-
-Both get worse as you tire. Every pitch drains stamina, which widens your misses
-and narrows both meter windows, so a 25-pitch inning genuinely costs you
-something. Aiming at a corner is also harder to execute than working the middle —
-which is the actual trade in real pitching, and the reason to ever throw a strike.
+The three-stop meter has two independent failure modes: missing the power stop
+hangs a breaking ball back over the middle (a four-seam can't hang — no break
+to lose), while missing the accuracy stop sprays the pitch to the side you
+stopped on. Stamina drains per pitch — faster for low-stamina arms — widening
+misses and narrowing both meter windows, so pitch economy is a real currency.
+Corners are harder to hit than the middle, which is the actual trade in
+pitching.
 
 ## Layout
 
 ```
-src/engine/     pure TypeScript, no React — fully testable
-  types.ts      shared types and the coordinate system
-  pitches.ts    the arsenal, with tunnel groups
-  batters.ts    the lineup — four hitters who beat you differently
-  zone.ts       strike zone, umpire noise, location quality
-  batterAI.ts   the guess model, deception, swing decisions
-  resolve.ts    execution, whiffs, contact quality
-  game.ts       inning state machine and base running
-  engine.test.ts
-src/ui/         React components
+src/engine/        pure TypeScript, no React — fully testable
+  pitchCatalog.ts  all 18 pitches with tunnel groups
+  player.ts        create-a-pitcher: archetypes, ratings, grades, XP economy
+  opponents.ts     lineup generation by level of ball
+  batterAI.ts      the guess model, deception, swing decisions
+  resolve.ts       execution, whiffs, contact
+  game.ts          inning state machine and base running
+src/career/        career mode, also engine-pure
+  teams.ts         invented colleges and the Federal Baseball League
+  story.ts         story beats as serializable data
+  career.ts        the fork, seasons, draft, promotion, saves
+  sim.ts           run support, bullpen, pitcher decisions, XP
+src/ui/            React + one canvas
+  Stage.tsx        the broadcast camera and ball flight
+  GameDay.tsx      a full start, inning by inning
+  screens/         menu, create-a-pitcher, hub, story player
 ```
 
-The engine never imports React and never mutates state, so an inning can be
-replayed from a seed. Tests cover the pieces that make the game work — that
-repeating a pitch raises the hitter's weight on it, that a changeup out-deceives
-a curve behind fastballs, that a missed power stop pulls a curveball back over
-the plate, and that grooving fastballs down the middle gives up more runs than
-working the corners.
+The engine never imports React and never mutates state; careers save to
+localStorage as plain JSON after every change.
 
 ## Coordinates
 
-`x` is screen-right (glove side for a right-handed pitcher), `y` is up, one unit
-is about 5.7 inches. The strike zone is `|x| < 1.5` and `|y| < 1.5`, which lines
-up exactly with the middle 3×3 of the aiming grid.
-
-## Where this could go
-
-- More innings, a full lineup, a pitch-count limit and a hook
-- Hitters who carry their read across at-bats within a game
-- Arsenal building between outings — add a cutter, improve changeup command
-- A catcher who suggests pitches you can shake off
+`x` is screen-right from behind the mound (glove side for a right-hander), `y`
+is up, one unit is about 5.7 inches. The strike zone is `|x| < 1.5` and
+`|y| < 1.5` — the middle 3×3 of the aiming grid. A lefty's arm-side break
+mirrors automatically.

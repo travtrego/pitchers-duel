@@ -12,7 +12,10 @@ export interface Loc {
   y: number;
 }
 
-export type TunnelGroup = 'hard' | 'sweep' | 'loop';
+export type TunnelGroup = 'hard' | 'sweep' | 'loop' | 'flutter';
+
+/** Broad family a hitter thinks in when he "sits on" something. */
+export type SpeedClass = 'hard' | 'breaking' | 'offspeed';
 
 export interface PitchType {
   id: string;
@@ -34,6 +37,9 @@ export interface PitchType {
   gb: number;
   /** Pitches sharing a tunnel look alike out of the hand. */
   tunnel: TunnelGroup;
+  speedClass: SpeedClass;
+  /** Knuckleball flag: break re-rolls on every throw and nobody commands it. */
+  flutter?: boolean;
   color: string;
   blurb: string;
 }
@@ -141,6 +147,12 @@ export interface Guess {
 export type Bases = [boolean, boolean, boolean];
 
 export interface GameState {
+  /** The pitcher's usable pitches for this outing, already scaled by his ratings. */
+  arsenal: PitchType[];
+  /** The opposing order this outing. */
+  lineup: Batter[];
+  /** Stamina drained per pitch; better-conditioned arms drain slower. */
+  staminaPerPitch: number;
   inning: number;
   outs: number;
   balls: number;

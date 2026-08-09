@@ -1,9 +1,5 @@
-import { ARSENAL, getPitch } from './pitches';
 import type { Batter, Guess, Loc, MemoryEntry, PitchType } from './types';
 import { clamp01, strikeLook } from './zone';
-
-/** Pitches a hitter thinks of as "hard stuff" when he sits fastball. */
-const HARD = ['FF', 'SI'];
 
 /**
  * How much the hitter leans on hard stuff in each count. Hitters hunt fastballs
@@ -45,7 +41,8 @@ export function chaseRate(balls: number, strikes: number): number {
 }
 
 /**
- * Builds what the hitter is looking for on the next pitch.
+ * Builds what the hitter is looking for on the next pitch, over whatever
+ * arsenal this particular pitcher actually throws.
  *
  * Three forces combine: his standing preference, the leverage of the count, and
  * — the one that makes pitch selection a skill — what you have actually been
@@ -57,15 +54,18 @@ export function computeGuess(
   memory: MemoryEntry[],
   balls: number,
   strikes: number,
+  arsenal: PitchType[],
 ): Guess {
   const weights: Record<string, number> = {};
   const lean = fastballLean(balls, strikes);
+  const hard = arsenal.filter((p) => p.speedClass === 'hard');
+  const soft = arsenal.filter((p) => p.speedClass !== 'hard');
 
-  for (const p of ARSENAL) {
-    const isHard = HARD.includes(p.id);
-    const base = isHard
-      ? (batter.sitFastball * (p.id === 'FF' ? 0.55 : 0.45)) * lean
-      : ((1 - batter.sitFastball) / (ARSENAL.length - HARD.length)) * (2 - lean) * 0.9;
+  for (const p of arsenal) {
+    const base =
+      p.speedClass === 'hard'
+        ? (batter.sitFastball / Math.max(1, hard.length)) * lean
+        : ((1 - batter.sitFastball) / Math.max(1, soft.length)) * (2 - lean) * 0.9;
     weights[p.id] = Math.max(0.01, base);
   }
 
@@ -88,7 +88,13 @@ export function computeGuess(
   for (const k of Object.keys(weights)) weights[k] /= total;
 
   let expectedVelo = 0;
-  for (const p of ARSENAL) expectedVelo += weights[p.id] * p.velo;
+  for (const p of arsenal) expectedVelo += (weights[p.id] ?? 0) * p.velo;
+  // Weights on ids outside the arsenal (stale memory) fall back to average velo.
+  const covered = arsenal.reduce((a, p) => a + (weights[p.id] ?? 0), 0);
+  if (covered < 1 && arsenal.length > 0) {
+    const avg = arsenal.reduce((a, p) => a + p.velo, 0) / arsenal.length;
+    expectedVelo += (1 - covered) * avg;
+  }
 
   const aggression = clamp01(
     zoneSwingRate(balls, strikes) * (0.7 + 0.6 * batter.aggression),
@@ -108,19 +114,21 @@ export function computeGuess(
  * Being wrong about the pitch is only half of it — the other half is whether the
  * pitch he *was* looking for shares a tunnel with the one you threw. A changeup
  * behind fastballs is devastating; a curveball behind fastballs is merely a
- * different pitch, because he picks the shape up out of the hand.
+ * different pitch, because he picks the shape up out of the hand. A knuckleball
+ * is its own tunnel: nobody reads it because there is nothing to read.
  */
 export function computeDeception(
   thrown: PitchType,
   guess: Guess,
   batter: Batter,
   actualVelo: number,
+  arsenal: PitchType[],
 ): number {
   const match = guess.typeWeights[thrown.id] ?? 0.2;
   const surprise = clamp01(1 - match / 0.45);
 
   let tunnelShare = 0;
-  for (const p of ARSENAL) {
+  for (const p of arsenal) {
     if (p.tunnel === thrown.tunnel) tunnelShare += guess.typeWeights[p.id] ?? 0;
   }
   const tunnelFactor = 0.6 + 0.7 * Math.max(0, tunnelShare - match);
@@ -128,7 +136,8 @@ export function computeDeception(
   const veloSurprise = clamp01(Math.abs(guess.expectedVelo - actualVelo) / 14);
   const recognition = 0.55 + 0.45 * (1 - batter.contact);
 
-  return clamp01((surprise * 0.7 + veloSurprise * 0.5) * tunnelFactor * recognition);
+  const flutterBonus = thrown.flutter ? 0.25 : 0;
+  return clamp01(((surprise * 0.7 + veloSurprise * 0.5) * tunnelFactor + flutterBonus) * recognition);
 }
 
 /** Probability the hitter offers at this pitch. */
@@ -166,10 +175,10 @@ export function swingProbability(
   return clamp01(base);
 }
 
-export function topGuess(guess: Guess): { pitch: PitchType; weight: number } {
-  let bestId = ARSENAL[0].id;
-  for (const p of ARSENAL) {
-    if ((guess.typeWeights[p.id] ?? 0) > (guess.typeWeights[bestId] ?? 0)) bestId = p.id;
+export function topGuess(guess: Guess, arsenal: PitchType[]): { pitch: PitchType; weight: number } {
+  let best = arsenal[0];
+  for (const p of arsenal) {
+    if ((guess.typeWeights[p.id] ?? 0) > (guess.typeWeights[best.id] ?? 0)) best = p;
   }
-  return { pitch: getPitch(bestId), weight: guess.typeWeights[bestId] };
+  return { pitch: best, weight: guess.typeWeights[best.id] ?? 0 };
 }

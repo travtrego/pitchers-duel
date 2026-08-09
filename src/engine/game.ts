@@ -1,6 +1,6 @@
-import { batterAt } from './batters';
+import { LINEUP } from './batters';
 import { computeDeception, computeGuess, swingProbability } from './batterAI';
-import { getPitch } from './pitches';
+import { ARSENAL } from './pitches';
 import {
   executePitch,
   foulProbability,
@@ -21,13 +21,23 @@ import type {
   MeterResult,
   PitchCall,
   PitchOutcome,
+  PitchType,
 } from './types';
 import { clamp01, umpireCallsStrike } from './zone';
 
 export const STAMINA_PER_PITCH = 0.009;
 
-export function newGame(): GameState {
+export interface NewGameOptions {
+  arsenal?: PitchType[];
+  lineup?: Batter[];
+  staminaPerPitch?: number;
+}
+
+export function newGame(opts: NewGameOptions = {}): GameState {
   return {
+    arsenal: opts.arsenal ?? ARSENAL,
+    lineup: opts.lineup ?? LINEUP,
+    staminaPerPitch: opts.staminaPerPitch ?? STAMINA_PER_PITCH,
     inning: 1,
     outs: 0,
     balls: 0,
@@ -45,13 +55,35 @@ export function newGame(): GameState {
   };
 }
 
+/**
+ * Roll into the next frame of the same outing: fresh outs and bases, same
+ * arm, same pitch count, and the same hitters' memory of you.
+ */
+export function nextInning(state: GameState): GameState {
+  return {
+    ...state,
+    inning: state.inning + 1,
+    outs: 0,
+    balls: 0,
+    strikes: 0,
+    bases: [false, false, false],
+    inningOver: false,
+  };
+}
+
 export function currentBatter(state: GameState): Batter {
-  return batterAt(state.batterIndex);
+  return state.lineup[state.batterIndex % state.lineup.length];
+}
+
+export function pitchFrom(state: GameState, id: string): PitchType {
+  const p = state.arsenal.find((a) => a.id === id);
+  if (!p) throw new Error(`Pitch ${id} is not in this pitcher's arsenal`);
+  return p;
 }
 
 /** What the hitter is sitting on right now. Exposed so the UI can hint at it. */
 export function currentGuess(state: GameState): Guess {
-  return computeGuess(currentBatter(state), state.memory, state.balls, state.strikes);
+  return computeGuess(currentBatter(state), state.memory, state.balls, state.strikes, state.arsenal);
 }
 
 interface BaseAdvance {
@@ -199,10 +231,10 @@ const TRAJECTORY_WORD: Record<string, string> = {
 
 function describe(
   outcome: Omit<PitchOutcome, 'description'>,
+  pitch: PitchType,
   batter: Batter,
   contact: ContactResult | null,
 ): string {
-  const pitch = getPitch(outcome.pitchId);
   const velo = `${pitch.abbrev} ${Math.round(outcome.velo)}`;
   switch (outcome.kind) {
     case 'ball':
@@ -259,10 +291,10 @@ export function throwPitch(
   rng: Rng = makeRng(Date.now()),
 ): ThrowResult {
   const batter = currentBatter(state);
-  const pitch = getPitch(call.pitchId);
-  const guess = computeGuess(batter, state.memory, state.balls, state.strikes);
-  const exec = executePitch(call, meter, state.pitcher, rng);
-  const deception = computeDeception(pitch, guess, batter, exec.velo);
+  const pitch = pitchFrom(state, call.pitchId);
+  const guess = computeGuess(batter, state.memory, state.balls, state.strikes, state.arsenal);
+  const exec = executePitch(pitch, call.aim, meter, state.pitcher, rng);
+  const deception = computeDeception(pitch, guess, batter, exec.velo, state.arsenal);
   const swingProb = swingProbability(
     exec.actual,
     pitch,
@@ -283,7 +315,7 @@ export function throwPitch(
   };
 
   next.pitcher.pitchCount += 1;
-  next.pitcher.stamina = clamp01(1 - next.pitcher.pitchCount * STAMINA_PER_PITCH);
+  next.pitcher.stamina = clamp01(1 - next.pitcher.pitchCount * state.staminaPerPitch);
   next.memory.push({
     pitchId: call.pitchId,
     loc: exec.actual,
@@ -302,10 +334,10 @@ export function throwPitch(
     kind = umpireCallsStrike(exec.actual, rng.next()) ? 'called_strike' : 'ball';
   } else {
     const timing = timingError(exec, guess, batter, deception);
-    if (rng.chance(whiffProbability(exec, batter, call.pitchId, timing))) {
+    if (rng.chance(whiffProbability(exec, batter, pitch, timing))) {
       kind = 'swinging_strike';
     } else {
-      contact = resolveContact(exec, batter, call.pitchId, timing, rng);
+      contact = resolveContact(exec, batter, pitch, timing, rng);
       if (rng.chance(foulProbability(contact.quality, batter, state.strikes))) {
         kind = 'foul';
       } else {
@@ -386,7 +418,7 @@ export function throwPitch(
   };
   const outcome: PitchOutcome = {
     ...partial,
-    description: describe(partial, batter, contact),
+    description: describe(partial, pitch, batter, contact),
   };
   next.log.push(outcome);
 

@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { computeDeception, computeGuess } from './batterAI';
 import { LINEUP } from './batters';
-import { advanceOnHit, newGame, throwPitch, walkRunners } from './game';
-import { getPitch } from './pitches';
+import { advanceOnHit, newGame, nextInning, throwPitch, walkRunners } from './game';
+import { ARSENAL, getPitch } from './pitches';
+import { PITCH_CATALOG } from './pitchCatalog';
+import {
+  ARCHETYPES,
+  deriveArsenal,
+  derivePitch,
+  makePlayer,
+  staminaPerPitch,
+} from './player';
+import { generateLineup } from './opponents';
 import { executePitch } from './resolve';
 import { makeRng } from './rng';
 import type { Bases, MemoryEntry, MeterResult, PitcherState } from './types';
@@ -40,10 +49,23 @@ describe('strike zone', () => {
   });
 });
 
+describe('pitch catalog', () => {
+  it('has 18 distinct pitches', () => {
+    expect(PITCH_CATALOG.length).toBe(18);
+    expect(new Set(PITCH_CATALOG.map((p) => p.id)).size).toBe(18);
+  });
+
+  it('keeps every offspeed pitch except the knuckleball in the fastball tunnel', () => {
+    for (const p of PITCH_CATALOG.filter((x) => x.speedClass === 'offspeed' && !x.flutter)) {
+      expect(p.tunnel).toBe('hard');
+    }
+  });
+});
+
 describe('execution', () => {
   it('puts a perfectly executed pitch exactly on the target', () => {
     const rng = makeRng(1);
-    const exec = executePitch({ pitchId: 'SL', aim: { x: 1, y: -1 } }, PERFECT, FRESH, rng);
+    const exec = executePitch(getPitch('SL'), { x: 1, y: -1 }, PERFECT, FRESH, rng);
     expect(exec.actual.x).toBeCloseTo(1);
     expect(exec.actual.y).toBeCloseTo(-1);
     expect(exec.hung).toBe(false);
@@ -53,12 +75,7 @@ describe('execution', () => {
     const meter: MeterResult = { powerError: 0, accuracyError: 0.6 };
     let sum = 0;
     for (let seed = 0; seed < 200; seed++) {
-      const exec = executePitch(
-        { pitchId: 'FF', aim: { x: 0, y: 0 } },
-        meter,
-        FRESH,
-        makeRng(seed),
-      );
+      const exec = executePitch(getPitch('FF'), { x: 0, y: 0 }, meter, FRESH, makeRng(seed));
       sum += exec.actual.x;
     }
     expect(sum / 200).toBeGreaterThan(0.4);
@@ -66,7 +83,8 @@ describe('execution', () => {
     let mirrored = 0;
     for (let seed = 0; seed < 200; seed++) {
       const exec = executePitch(
-        { pitchId: 'FF', aim: { x: 0, y: 0 } },
+        getPitch('FF'),
+        { x: 0, y: 0 },
         { powerError: 0, accuracyError: -0.6 },
         FRESH,
         makeRng(seed),
@@ -78,8 +96,8 @@ describe('execution', () => {
 
   it('punishes a hard-to-command pitch more than a fastball for the same miss', () => {
     const meter: MeterResult = { powerError: 0, accuracyError: 0.5 };
-    const ff = executePitch({ pitchId: 'FF', aim: { x: 0, y: 0 } }, meter, FRESH, makeRng(7));
-    const cb = executePitch({ pitchId: 'CB', aim: { x: 0, y: 0 } }, meter, FRESH, makeRng(7));
+    const ff = executePitch(getPitch('FF'), { x: 0, y: 0 }, meter, FRESH, makeRng(7));
+    const cb = executePitch(getPitch('CB'), { x: 0, y: 0 }, meter, FRESH, makeRng(7));
     expect(Math.hypot(cb.actual.x, cb.actual.y)).toBeGreaterThan(
       Math.hypot(ff.actual.x, ff.actual.y),
     );
@@ -87,7 +105,8 @@ describe('execution', () => {
 
   it('hangs a breaking ball back toward the middle when power is missed', () => {
     const exec = executePitch(
-      { pitchId: 'CB', aim: { x: 0, y: -2 } },
+      getPitch('CB'),
+      { x: 0, y: -2 },
       { powerError: 0.8, accuracyError: 0 },
       FRESH,
       makeRng(3),
@@ -99,7 +118,8 @@ describe('execution', () => {
 
   it('never hangs a four-seam, which has no break to lose', () => {
     const exec = executePitch(
-      { pitchId: 'FF', aim: { x: 0, y: 0 } },
+      getPitch('FF'),
+      { x: 0, y: 0 },
       { powerError: 0.9, accuracyError: 0 },
       FRESH,
       makeRng(3),
@@ -109,45 +129,56 @@ describe('execution', () => {
 
   it('sprays the ball further when the arm is tired', () => {
     const meter: MeterResult = { powerError: 0, accuracyError: 0.5 };
-    const fresh = executePitch({ pitchId: 'SL', aim: { x: 0, y: 0 } }, meter, FRESH, makeRng(11));
+    const fresh = executePitch(getPitch('SL'), { x: 0, y: 0 }, meter, FRESH, makeRng(11));
     const tired = executePitch(
-      { pitchId: 'SL', aim: { x: 0, y: 0 } },
+      getPitch('SL'),
+      { x: 0, y: 0 },
       meter,
       { pitchCount: 70, stamina: 0.35 },
       makeRng(11),
     );
     expect(Math.abs(tired.actual.x)).toBeGreaterThan(Math.abs(fresh.actual.x));
   });
+
+  it('wanders a knuckleball even on a perfect meter', () => {
+    let moved = 0;
+    for (let seed = 0; seed < 50; seed++) {
+      const exec = executePitch(getPitch('KN'), { x: 0, y: 0 }, PERFECT, FRESH, makeRng(seed));
+      moved += Math.hypot(exec.actual.x, exec.actual.y);
+    }
+    expect(moved / 50).toBeGreaterThan(0.3);
+  });
 });
 
 describe('batter guess model', () => {
   it('hunts fastballs when ahead and covers spin with two strikes', () => {
-    const ahead = computeGuess(HITTER, [], 3, 0);
-    const behind = computeGuess(HITTER, [], 0, 2);
+    const ahead = computeGuess(HITTER, [], 3, 0, ARSENAL);
+    const behind = computeGuess(HITTER, [], 0, 2, ARSENAL);
     expect(ahead.typeWeights.FF).toBeGreaterThan(behind.typeWeights.FF);
     expect(behind.typeWeights.SL).toBeGreaterThan(ahead.typeWeights.SL);
     expect(ahead.expectedVelo).toBeGreaterThan(behind.expectedVelo);
   });
 
   it('leans toward a pitch you keep going back to', () => {
-    const cold = computeGuess(HITTER, [], 1, 1);
-    const hot = computeGuess(HITTER, memoryOf('SL', 4), 1, 1);
+    const cold = computeGuess(HITTER, [], 1, 1, ARSENAL);
+    const hot = computeGuess(HITTER, memoryOf('SL', 4), 1, 1, ARSENAL);
     expect(hot.typeWeights.SL).toBeGreaterThan(cold.typeWeights.SL);
   });
 
   it('weighs pitches from the current at-bat more than earlier ones', () => {
-    const thisAb = computeGuess(HITTER, memoryOf('CB', 3), 1, 1);
+    const thisAb = computeGuess(HITTER, memoryOf('CB', 3), 1, 1, ARSENAL);
     const earlier = computeGuess(
       HITTER,
       memoryOf('CB', 3).map((m) => ({ ...m, thisPlateAppearance: false })),
       1,
       1,
+      ARSENAL,
     );
     expect(thisAb.typeWeights.CB).toBeGreaterThan(earlier.typeWeights.CB);
   });
 
   it('normalizes weights to a probability distribution', () => {
-    const g = computeGuess(HITTER, memoryOf('FF', 6), 2, 1);
+    const g = computeGuess(HITTER, memoryOf('FF', 6), 2, 1, ARSENAL);
     const total = Object.values(g.typeWeights).reduce((a, b) => a + b, 0);
     expect(total).toBeCloseTo(1, 5);
   });
@@ -158,32 +189,78 @@ describe('batter guess model', () => {
       loc: { x: 2, y: 1 },
       thisPlateAppearance: true,
     }));
-    expect(computeGuess(HITTER, memory, 1, 1).zoneLean.x).toBeGreaterThan(1);
+    expect(computeGuess(HITTER, memory, 1, 1, ARSENAL).zoneLean.x).toBeGreaterThan(1);
   });
 });
 
 describe('deception', () => {
   it('fools the hitter more with a changeup than a curve behind fastballs', () => {
-    const guess = computeGuess(HITTER, memoryOf('FF', 4), 1, 1);
-    const ch = computeDeception(getPitch('CH'), guess, HITTER, 85);
-    const cb = computeDeception(getPitch('CB'), guess, HITTER, 80);
+    const guess = computeGuess(HITTER, memoryOf('FF', 4), 1, 1, ARSENAL);
+    const ch = computeDeception(getPitch('CH'), guess, HITTER, 85, ARSENAL);
+    const cb = computeDeception(getPitch('CB'), guess, HITTER, 80, ARSENAL);
     // Both are offspeed surprises, but only the changeup shares the fastball tunnel.
     expect(ch).toBeGreaterThan(cb);
   });
 
   it('stops fooling anyone once the hitter is sitting on the pitch', () => {
-    const cold = computeGuess(HITTER, [], 1, 1);
-    const hot = computeGuess(HITTER, memoryOf('SL', 5), 1, 1);
-    expect(computeDeception(getPitch('SL'), hot, HITTER, 87)).toBeLessThan(
-      computeDeception(getPitch('SL'), cold, HITTER, 87),
+    const cold = computeGuess(HITTER, [], 1, 1, ARSENAL);
+    const hot = computeGuess(HITTER, memoryOf('SL', 5), 1, 1, ARSENAL);
+    expect(computeDeception(getPitch('SL'), hot, HITTER, 87, ARSENAL)).toBeLessThan(
+      computeDeception(getPitch('SL'), cold, HITTER, 87, ARSENAL),
     );
   });
 
   it('fools a weaker hitter more than a good one on the same pitch', () => {
-    const guess = computeGuess(LINEUP[3], memoryOf('FF', 3), 1, 1);
-    const rookie = computeDeception(getPitch('CH'), guess, LINEUP[3], 85);
-    const pro = computeDeception(getPitch('CH'), guess, LINEUP[0], 85);
+    const guess = computeGuess(LINEUP[3], memoryOf('FF', 3), 1, 1, ARSENAL);
+    const rookie = computeDeception(getPitch('CH'), guess, LINEUP[3], 85, ARSENAL);
+    const pro = computeDeception(getPitch('CH'), guess, LINEUP[0], 85, ARSENAL);
     expect(rookie).toBeGreaterThan(pro);
+  });
+});
+
+describe('created pitchers', () => {
+  it('derives a hotter fastball for a bigger arm', () => {
+    const flame = makePlayer('A', 'R', 'flamethrower', ['FF', 'SL', 'CH']);
+    const surgeon = makePlayer('B', 'R', 'surgeon', ['FF', 'SL', 'CH']);
+    const ff1 = derivePitch(flame.arsenal[0], flame.ratings);
+    const ff2 = derivePitch(surgeon.arsenal[0], surgeon.ratings);
+    expect(ff1.velo).toBeGreaterThan(ff2.velo);
+    // And the surgeon commands it far better.
+    expect(ff2.accuracyWindow).toBeGreaterThan(ff1.accuracyWindow);
+  });
+
+  it('mirrors break for a lefty', () => {
+    const righty = makePlayer('R', 'R', 'workhorse', ['SL', 'FF', 'CH']);
+    const lefty = makePlayer('L', 'L', 'workhorse', ['SL', 'FF', 'CH']);
+    expect(deriveArsenal(righty)[0].break.x).toBeGreaterThan(0);
+    expect(deriveArsenal(lefty)[0].break.x).toBeLessThan(0);
+  });
+
+  it('drains a low-stamina arm faster', () => {
+    const horse = makePlayer('H', 'R', 'workhorse', ['FF', 'SL', 'CH']);
+    const flame = makePlayer('F', 'R', 'flamethrower', ['FF', 'SL', 'CH']);
+    expect(staminaPerPitch(horse)).toBeLessThan(staminaPerPitch(flame));
+  });
+
+  it('offers four archetypes with distinct identities', () => {
+    expect(ARCHETYPES.length).toBe(4);
+    const velos = ARCHETYPES.map((a) => a.ratings.velocity);
+    expect(new Set(velos).size).toBeGreaterThan(2);
+  });
+});
+
+describe('generated lineups', () => {
+  it('produces nine hitters shaped like a batting order', () => {
+    const order = generateLineup(42, 0.6, 'Test');
+    expect(order.length).toBe(9);
+    // Heart of the order out-slugs the bottom.
+    const heart = (order[2].power + order[3].power) / 2;
+    const bottom = (order[7].power + order[8].power) / 2;
+    expect(heart).toBeGreaterThan(bottom);
+  });
+
+  it('is deterministic for a seed', () => {
+    expect(generateLineup(7, 0.5, 'X')[0].name).toBe(generateLineup(7, 0.5, 'X')[0].name);
   });
 });
 
@@ -261,6 +338,24 @@ describe('inning flow', () => {
     }
   });
 
+  it('rolls to a fresh frame but keeps the arm and the hitters` memory', () => {
+    const rng = makeRng(2);
+    let state = newGame();
+    let guard = 0;
+    while (!state.inningOver && guard++ < 300) {
+      state = throwPitch(state, { pitchId: 'FF', aim: { x: 1, y: 1 } }, PERFECT, rng).state;
+    }
+    const before = state;
+    const after = nextInning(state);
+    expect(after.inning).toBe(before.inning + 1);
+    expect(after.outs).toBe(0);
+    expect(after.bases).toEqual([false, false, false]);
+    expect(after.inningOver).toBe(false);
+    expect(after.pitcher.pitchCount).toBe(before.pitcher.pitchCount);
+    expect(after.memory.length).toBe(before.memory.length);
+    expect(after.runs).toBe(before.runs);
+  });
+
   it('drains stamina as the pitch count climbs', () => {
     const rng = makeRng(9);
     let state = newGame();
@@ -289,6 +384,23 @@ describe('inning flow', () => {
     }
     expect(state.log.length).toBe(state.pitcher.pitchCount);
     expect(state.log.every((o) => o.description.length > 0)).toBe(true);
+  });
+
+  it('runs a full game with a created pitcher against a generated lineup', () => {
+    const player = makePlayer('Kid', 'L', 'junkballer', ['SI', 'ST', 'VC']);
+    const state0 = newGame({
+      arsenal: deriveArsenal(player),
+      lineup: generateLineup(5, 0.55, 'Rails'),
+      staminaPerPitch: staminaPerPitch(player),
+    });
+    const rng = makeRng(31);
+    let state = state0;
+    let guard = 0;
+    while (!state.inningOver && guard++ < 500) {
+      const id = state.arsenal[guard % state.arsenal.length].id;
+      state = throwPitch(state, { pitchId: id, aim: { x: -1, y: -1 } }, PERFECT, rng).state;
+    }
+    expect(state.inningOver).toBe(true);
   });
 });
 
