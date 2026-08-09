@@ -11,7 +11,13 @@ import { cellCenter } from '../engine/zone';
  * arrives late (s^2.2). Two pitches aimed off the same look separate only in
  * the last fifteen feet — and because ghost trails of recent pitches stay on
  * screen, you can see your sequences working (or telegraphed).
+ *
+ * Contact continues the shot: the ball leaves the bat and plays out its
+ * trajectory — a grounder skipping up the middle, a fly hanging toward the
+ * stands, a homer clearing them — while the batter swings through.
  */
+
+export type ExitKind = 'ground' | 'line' | 'fly' | 'popup' | 'foul' | 'hr' | null;
 
 export interface Flight {
   /** Where the ball ends up, zone units. */
@@ -21,6 +27,10 @@ export interface Flight {
   velo: number;
   color: string;
   hung: boolean;
+  /** Whether the hitter offers — drives the swing animation. */
+  swing: boolean;
+  /** Ball-off-the-bat animation after arrival, when there was contact. */
+  exit: ExitKind;
 }
 
 export interface GhostTrail {
@@ -51,6 +61,11 @@ function flightMs(velo: number): number {
   return (56 / Math.max(50, velo)) * 1000;
 }
 
+function exitMs(kind: ExitKind): number {
+  if (!kind) return 0;
+  return kind === 'hr' ? 1050 : kind === 'popup' ? 900 : kind === 'ground' ? 650 : 750;
+}
+
 export function Stage({
   width = 660,
   height = 540,
@@ -67,26 +82,60 @@ export function Stage({
   const arriveRef = useRef(onArrive);
   arriveRef.current = onArrive;
 
+  // The arrival callback mutates game state — new batter, a new ghost trail —
+  // which would otherwise re-run the animation effect and restart the pitch
+  // mid-flight. Both are read through refs and snapshotted when a pitch
+  // starts, so a throw always animates exactly once, start to finish.
+  const ghostsRef = useRef(ghosts);
+  ghostsRef.current = ghosts;
+  const batterRef = useRef(batter);
+  batterRef.current = batter;
+
   const geom = useMemo(() => makeGeometry(width, height, throws), [width, height, throws]);
 
-  // Static scene + ghosts redraw whenever inputs change; the flight animation
-  // runs its own rAF loop on top.
+  // Idle scene: no pitch in the air.
   useEffect(() => {
+    if (flight) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d')!;
+    drawField(ctx, geom);
+    for (const g of ghosts) drawGhost(ctx, geom, g);
+    drawZone(ctx, geom);
+    drawPlateAndCatcher(ctx, geom);
+    drawBatter(ctx, geom, batter, 0);
+  }, [flight, ghosts, geom, batter]);
+
+  // A pitch in flight, and its ball off the bat.
+  useEffect(() => {
+    if (!flight) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d')!;
     let raf = 0;
     let start = 0;
-    let done = false;
+    let arrived = false;
 
-    const drawScene = (ball: { x: number; y: number; r: number; trail: [number, number][] } | null) => {
-      drawBackdrop(ctx, geom, batter);
-      for (const g of ghosts) drawGhost(ctx, geom, g);
+    // Freeze the scene as it stood when this pitch left the hand.
+    const sceneGhosts = ghostsRef.current;
+    const sceneBatter = batterRef.current;
+
+    interface BallFrame {
+      x: number;
+      y: number;
+      r: number;
+      trail: [number, number][];
+    }
+
+    const drawScene = (ball: BallFrame | null, batPose: number) => {
+      drawField(ctx, geom);
+      for (const g of sceneGhosts) drawGhost(ctx, geom, g);
       drawZone(ctx, geom);
+      drawPlateAndCatcher(ctx, geom);
+      drawBatter(ctx, geom, sceneBatter, batPose);
       if (ball) {
-        // Trail first, ball on top.
         ctx.save();
-        ctx.strokeStyle = flight!.color;
+        ctx.strokeStyle = flight.color;
         ctx.lineWidth = 3;
         ctx.lineCap = 'round';
         ctx.globalAlpha = 0.5;
@@ -107,33 +156,51 @@ export function Stage({
         grad.addColorStop(1, '#c8ccd4');
         ctx.fillStyle = grad;
         ctx.beginPath();
-        ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
+        ctx.arc(ball.x, ball.y, Math.max(1, ball.r), 0, Math.PI * 2);
         ctx.fill();
-        ctx.strokeStyle = flight!.hung ? '#ffd166' : 'rgba(0,0,0,0.35)';
-        ctx.lineWidth = flight!.hung ? 2 : 1;
+        ctx.strokeStyle = flight.hung ? '#ffd166' : 'rgba(0,0,0,0.35)';
+        ctx.lineWidth = flight.hung ? 2 : 1;
         ctx.stroke();
       }
     };
 
-    if (!flight) {
-      drawScene(null);
-      return;
-    }
-
-    const ms = flightMs(flight.velo);
+    const inMs = flightMs(flight.velo);
+    const outMs = exitMs(flight.exit);
     const trail: [number, number][] = [];
+    const contact = { x: 0, y: 0 };
+
     const tick = (now: number) => {
       if (!start) start = now;
-      const s = Math.min(1, (now - start) / ms);
-      const pos = flightPoint(geom, flight, s);
-      trail.push([pos.x, pos.y]);
-      drawScene({ ...pos, trail });
-      if (s < 1) {
+      const t = now - start;
+
+      if (t <= inMs) {
+        // Inbound: ball from hand to plate; hitter loads, then swings late.
+        const s = Math.min(1, t / inMs);
+        const pos = flightPoint(geom, flight, s);
+        trail.push([pos.x, pos.y]);
+        drawScene({ ...pos, trail }, batPoseAt(flight.swing, s));
+        contact.x = pos.x;
+        contact.y = pos.y;
         raf = requestAnimationFrame(tick);
-      } else if (!done) {
-        done = true;
+        return;
+      }
+
+      if (!arrived) {
+        arrived = true;
         arriveRef.current?.();
       }
+
+      if (flight.exit && t <= inMs + outMs) {
+        // Outbound: ball off the bat. Trail resets — it's a new journey.
+        const s = Math.min(1, (t - inMs) / outMs);
+        const pos = exitPoint(geom, flight.exit, contact, s, batter.hand);
+        drawScene({ ...pos, trail: [] }, 2.4);
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+
+      // Done: hold the scene, ball gone, bat follow-through if he swung.
+      drawScene(null, flight.swing ? 2.4 : 0);
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
@@ -145,7 +212,7 @@ export function Stage({
     for (let row = 0; row < 5; row++) {
       for (let col = 0; col < 5; col++) {
         const c = cellCenter(col, row);
-        const p = geom.zoneToScreen(c.x + 0, c.y + 0);
+        const p = geom.zoneToScreen(c.x, c.y);
         const inZone = Math.abs(c.x) < 1.5 && Math.abs(c.y) < 1.5;
         const selected = aim && aim.x === c.x && aim.y === c.y;
         cells.push(
@@ -179,7 +246,7 @@ export function Stage({
 }
 
 // ---------------------------------------------------------------------------
-// Geometry and drawing
+// Geometry
 // ---------------------------------------------------------------------------
 
 interface Geometry {
@@ -211,7 +278,7 @@ function makeGeometry(w: number, h: number, throws: 'R' | 'L'): Geometry {
   };
 }
 
-/** Position and size of the ball at flight fraction s. */
+/** Position and size of the ball at inbound flight fraction s. */
 function flightPoint(g: Geometry, f: Flight, s: number): { x: number; y: number; r: number } {
   const target = g.zoneToScreen(f.actual.x, f.actual.y);
   // Where the pitch "pretends" to be going before the break shows up.
@@ -222,6 +289,80 @@ function flightPoint(g: Geometry, f: Flight, s: number): { x: number; y: number;
   return { x, y, r: 13 - 8.5 * s };
 }
 
+/**
+ * Ball off the bat. Outbound means away from the camera: up-screen, shrinking.
+ * Each trajectory has its own shape; the horizontal drift leans slightly to
+ * the pull side of whoever hit it.
+ */
+function exitPoint(
+  g: Geometry,
+  kind: Exclude<ExitKind, null>,
+  from: { x: number; y: number },
+  s: number,
+  hand: 'R' | 'L',
+): { x: number; y: number; r: number } {
+  const { w, h } = g;
+  // From behind the mound the pitcher's right hand points toward third base,
+  // so left field is screen right. A righty pulls there; a lefty pulls the
+  // other way, to the first-base side.
+  const pull = hand === 'R' ? 1 : -1;
+  const ease = 1 - Math.pow(1 - s, 2);
+
+  switch (kind) {
+    case 'hr': {
+      const x = from.x + pull * w * 0.16 * ease;
+      const rise = Math.sin(Math.min(1, s * 1.15) * Math.PI);
+      const y = from.y + (h * 0.1 - from.y) * ease - rise * h * 0.22;
+      return { x, y, r: 4.5 - 3.5 * s };
+    }
+    case 'fly': {
+      const x = from.x + pull * w * 0.1 * ease;
+      const rise = Math.sin(s * Math.PI);
+      const y = from.y + (h * 0.3 - from.y) * ease - rise * h * 0.16;
+      return { x, y, r: 4.5 - 3 * s };
+    }
+    case 'line': {
+      const x = from.x + pull * w * 0.09 * ease;
+      const y = from.y + (h * 0.33 - from.y) * ease - Math.sin(s * Math.PI) * h * 0.03;
+      return { x, y, r: 4.5 - 3 * s };
+    }
+    case 'ground': {
+      const x = from.x + pull * w * 0.07 * ease;
+      // Skips: quick decaying bounces along the infield as it runs away.
+      const bounce = Math.abs(Math.sin(s * Math.PI * 3)) * (1 - s) * h * 0.035;
+      const y = from.y + (h * 0.42 - from.y) * ease - bounce;
+      return { x, y, r: 4.5 - 2.6 * s };
+    }
+    case 'popup': {
+      // Straight up over the plate, hangs, comes back down.
+      const upDown = Math.sin(s * Math.PI);
+      const y = from.y - upDown * h * 0.34;
+      return { x: from.x + pull * w * 0.015 * s, y, r: 4.5 - 1.6 * upDown };
+    }
+    case 'foul': {
+      // Sliced backward past the camera — it grows as it gets closer. The side
+      // comes from where contact happened so the whole arc stays coherent.
+      const side = from.x >= w / 2 ? 1 : -1;
+      const x = from.x + side * w * 0.4 * ease + pull * w * 0.05;
+      const y = from.y + h * 0.3 * ease;
+      return { x, y, r: 4.5 + 7 * s };
+    }
+  }
+}
+
+/** Bat angle through the load and swing, keyed to inbound flight fraction. */
+function batPoseAt(swing: boolean, s: number): number {
+  if (!swing) return 0;
+  // Load back slowly, then explode through the zone in the last fifth.
+  if (s < 0.55) return -(s / 0.55) * 0.5;
+  if (s < 0.8) return -0.5;
+  return -0.5 + ((s - 0.8) / 0.2) * 2.9;
+}
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+
 function drawGhost(ctx: CanvasRenderingContext2D, g: Geometry, ghost: GhostTrail) {
   ctx.save();
   ctx.strokeStyle = ghost.color;
@@ -230,7 +371,11 @@ function drawGhost(ctx: CanvasRenderingContext2D, g: Geometry, ghost: GhostTrail
   ctx.setLineDash([2, 5]);
   ctx.beginPath();
   for (let i = 0; i <= 24; i++) {
-    const p = flightPoint(g, { ...ghost, velo: 90, color: ghost.color, hung: false }, i / 24);
+    const p = flightPoint(
+      g,
+      { ...ghost, velo: 90, color: ghost.color, hung: false, swing: false, exit: null },
+      i / 24,
+    );
     if (i === 0) ctx.moveTo(p.x, p.y);
     else ctx.lineTo(p.x, p.y);
   }
@@ -249,7 +394,6 @@ function drawZone(ctx: CanvasRenderingContext2D, g: Geometry) {
   const tl = g.zoneToScreen(-1.5, 1.5);
   const size = 3 * g.unit;
   ctx.save();
-  // Faint interior thirds, like every broadcast K-zone.
   ctx.strokeStyle = 'rgba(255,255,255,0.14)';
   ctx.lineWidth = 1;
   for (let i = 1; i < 3; i++) {
@@ -268,9 +412,8 @@ function drawZone(ctx: CanvasRenderingContext2D, g: Geometry) {
   ctx.restore();
 }
 
-function drawBackdrop(ctx: CanvasRenderingContext2D, g: Geometry, batter: Batter) {
+function drawField(ctx: CanvasRenderingContext2D, g: Geometry) {
   const { w, h } = g;
-  // Night sky into stadium lights into field.
   const sky = ctx.createLinearGradient(0, 0, 0, h);
   sky.addColorStop(0, '#0b0e14');
   sky.addColorStop(0.42, '#131a26');
@@ -279,13 +422,11 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, g: Geometry, batter: Batter
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, w, h);
 
-  // Distant stands: banded silhouettes.
   ctx.fillStyle = '#0e1420';
   ctx.fillRect(0, h * 0.3, w, h * 0.09);
   ctx.fillStyle = '#111927';
   ctx.fillRect(0, h * 0.39, w, h * 0.07);
 
-  // Infield grass and dirt around the plate.
   ctx.fillStyle = '#22331f';
   ctx.fillRect(0, h * 0.52, w, h * 0.48);
   const dirt = ctx.createRadialGradient(w / 2, h * 0.66, 20, w / 2, h * 0.66, w * 0.42);
@@ -293,7 +434,10 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, g: Geometry, batter: Batter
   dirt.addColorStop(1, 'rgba(74,56,38,0)');
   ctx.fillStyle = dirt;
   ctx.fillRect(0, h * 0.5, w, h * 0.5);
+}
 
+function drawPlateAndCatcher(ctx: CanvasRenderingContext2D, g: Geometry) {
+  const { w, h } = g;
   // Home plate, mostly hidden behind the catcher the way it really is.
   const plateY = h * 0.648;
   ctx.fillStyle = '#c9c9c2';
@@ -306,28 +450,6 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, g: Geometry, batter: Batter
   ctx.closePath();
   ctx.fill();
 
-  // Batter silhouette: righties set up on the third-base side, which from
-  // behind the mound is screen right.
-  const side = batter.hand === 'R' ? 1 : -1;
-  const bx = w / 2 + side * g.unit * 3.4;
-  const by = h * 0.63;
-  ctx.save();
-  ctx.fillStyle = 'rgba(8,10,14,0.88)';
-  // Legs, torso, head, bat.
-  ctx.fillRect(bx - 9, by - 46, 20, 62);
-  ctx.beginPath();
-  ctx.arc(bx + 1, by - 56, 10, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.strokeStyle = 'rgba(8,10,14,0.88)';
-  ctx.lineWidth = 5;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.moveTo(bx + side * 8, by - 50);
-  ctx.lineTo(bx + side * 22, by - 78);
-  ctx.stroke();
-  ctx.restore();
-
-  // Catcher's crouch behind the plate.
   ctx.fillStyle = 'rgba(10,12,18,0.82)';
   ctx.beginPath();
   ctx.ellipse(w / 2, h * 0.695, 30, 18, 0, 0, Math.PI * 2);
@@ -335,4 +457,46 @@ function drawBackdrop(ctx: CanvasRenderingContext2D, g: Geometry, batter: Batter
   ctx.beginPath();
   ctx.arc(w / 2, h * 0.652, 9, 0, Math.PI * 2);
   ctx.fill();
+}
+
+/**
+ * Batter silhouette with a live bat. Pose is the bat's swing progress:
+ * negative = loading back, 0 = set, rising through ~2.4 = swung through.
+ */
+function drawBatter(
+  ctx: CanvasRenderingContext2D,
+  g: Geometry,
+  batter: Batter,
+  pose: number,
+) {
+  const { w, h } = g;
+  // Righties set up on the third-base side — screen right from the mound.
+  const side = batter.hand === 'R' ? 1 : -1;
+  const bx = w / 2 + side * g.unit * 3.4;
+  const by = h * 0.63;
+
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,10,14,0.88)';
+  // Torso leans into the swing slightly.
+  const lean = Math.max(0, pose) * 2.2;
+  ctx.fillRect(bx - 9 - side * lean, by - 46, 20, 62);
+  ctx.beginPath();
+  ctx.arc(bx + 1 - side * lean, by - 56, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // The bat: pivots at the hands. Set position points up-and-back; the swing
+  // sweeps it flat through the zone toward the pitcher.
+  const handsX = bx + side * 6 - side * lean;
+  const handsY = by - 48;
+  const setAngle = side === 1 ? -1.15 : Math.PI + 1.15;
+  const angle = setAngle - side * pose;
+  const len = 30;
+  ctx.strokeStyle = 'rgba(8,10,14,0.88)';
+  ctx.lineWidth = 5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(handsX, handsY);
+  ctx.lineTo(handsX + Math.cos(angle) * len, handsY + Math.sin(angle) * len);
+  ctx.stroke();
+  ctx.restore();
 }

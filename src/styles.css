@@ -155,6 +155,18 @@ input {
 
 /* ============================= SCORE BUG ============================= */
 
+.gameday-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.mute-btn {
+  padding: 9px 11px;
+  font-size: 15px;
+  line-height: 1;
+}
+
 .scorebug {
   display: flex;
   align-items: stretch;

@@ -5,7 +5,8 @@ import { makeRng } from '../engine/rng';
 import type { Batter, GameState, Loc, MeterResult, PitchType } from '../engine/types';
 import { bullpenLambda, finishGame, offenseLambda, runsInInning, type GameFinish, type StartLine } from '../career/sim';
 import { Meter } from './Meter';
-import { Stage, type Flight, type GhostTrail } from './Stage';
+import { sound } from './sound';
+import { Stage, type ExitKind, type Flight, type GhostTrail } from './Stage';
 
 export interface GameDayResult {
   line: StartLine;
@@ -50,6 +51,7 @@ export function GameDay(props: Props) {
   const [breakNote, setBreakNote] = useState('');
   const [paNote, setPaNote] = useState<string | null>(null);
   const [final, setFinal] = useState<GameDayResult | null>(null);
+  const arrivedRef = useRef<ThrowResult | null>(null);
 
   const offLambda = useMemo(() => offenseLambda(teamStrength, oppQuality), [teamStrength, oppQuality]);
   const penLambda = useMemo(() => bullpenLambda(teamStrength, oppQuality), [teamStrength, oppQuality]);
@@ -83,11 +85,34 @@ export function GameDay(props: Props) {
       velo: pending.outcome.velo,
       color: selected.color,
       hung: pending.outcome.hung,
+      swing: pending.outcome.decision === 'swing',
+      exit: exitKindOf(pending.outcome.kind, pending.outcome.batted),
     };
   }, [phase, pending, selected]);
 
   const onArrive = useCallback(() => {
     if (!pending || !selected) return;
+    // One arrival per pitch, no matter how the stage re-renders behind it.
+    if (arrivedRef.current === pending) return;
+    arrivedRef.current = pending;
+    const o = pending.outcome;
+
+    // The soundtrack of the moment the ball gets there.
+    if (o.kind === 'swinging_strike') {
+      sound.whiff();
+      sound.pop(o.velo * 0.96);
+    } else if (o.kind === 'foul') {
+      sound.crack(0.25);
+    } else if (o.kind === 'in_play') {
+      sound.crack(o.contactQuality ?? 0.5);
+    } else {
+      sound.pop(o.velo);
+    }
+    if (o.batted === 'home_run') sound.groan();
+    else if (pending.paResult === 'strikeout') sound.cheer(0.6);
+    else if (o.batted === 'double_play') sound.cheer(0.7);
+    else if (pending.state.inningOver) sound.cheer(0.45);
+
     setGame(pending.state);
     setGhosts((g) =>
       [...g, {
@@ -190,12 +215,15 @@ export function GameDay(props: Props) {
 
   return (
     <div className="gameday">
-      <ScoreBug
-        game={game}
-        usRuns={usRuns}
-        opponent={opponentName}
-        pitchLimit={pitchLimit}
-      />
+      <div className="gameday-top">
+        <ScoreBug
+          game={game}
+          usRuns={usRuns}
+          opponent={opponentName}
+          pitchLimit={pitchLimit}
+        />
+        <MuteButton />
+      </div>
 
       <div className="gameday-main">
         <aside className="gd-left">
@@ -234,7 +262,13 @@ export function GameDay(props: Props) {
               <div className="overlay pregame-overlay">
                 <div className="matchup-label">{matchup}</div>
                 <div className="matchup-vs">vs {opponentName}</div>
-                <button className="primary-btn" onClick={() => setPhase('select')}>
+                <button
+                  className="primary-btn"
+                  onClick={() => {
+                    sound.warm();
+                    setPhase('select');
+                  }}
+                >
                   Take the mound
                 </button>
               </div>
@@ -363,6 +397,25 @@ export function GameDay(props: Props) {
   );
 }
 
+function exitKindOf(kind: string, batted?: string): ExitKind {
+  if (kind === 'foul') return 'foul';
+  if (kind !== 'in_play') return null;
+  switch (batted) {
+    case 'home_run':
+      return 'hr';
+    case 'groundout':
+    case 'double_play':
+      return 'ground';
+    case 'flyout':
+    case 'sac_fly':
+      return 'fly';
+    case 'popout':
+      return 'popup';
+    default:
+      return 'line';
+  }
+}
+
 function bannerText(kind: string, batted?: string): string {
   switch (kind) {
     case 'ball': return 'BALL';
@@ -427,6 +480,22 @@ function ScoreBug({
         </div>
       </div>
     </div>
+  );
+}
+
+function MuteButton() {
+  const [muted, setMuted] = useState(sound.muted);
+  return (
+    <button
+      className="ghost-btn mute-btn"
+      onClick={() => {
+        sound.setMuted(!muted);
+        setMuted(!muted);
+      }}
+      aria-label={muted ? 'Unmute' : 'Mute'}
+    >
+      {muted ? '🔇' : '🔊'}
+    </button>
   );
 }
 
