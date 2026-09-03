@@ -12,7 +12,10 @@ export interface Loc {
   y: number;
 }
 
-export type TunnelGroup = 'hard' | 'sweep' | 'loop';
+export type TunnelGroup = 'hard' | 'sweep' | 'loop' | 'flutter';
+
+/** Broad family a hitter thinks in when he "sits on" something. */
+export type SpeedClass = 'hard' | 'breaking' | 'offspeed';
 
 export interface PitchType {
   id: string;
@@ -34,6 +37,9 @@ export interface PitchType {
   gb: number;
   /** Pitches sharing a tunnel look alike out of the hand. */
   tunnel: TunnelGroup;
+  speedClass: SpeedClass;
+  /** Knuckleball flag: break re-rolls on every throw and nobody commands it. */
+  flutter?: boolean;
   color: string;
   blurb: string;
 }
@@ -125,6 +131,8 @@ export interface MemoryEntry {
   loc: Loc;
   /** True if thrown to the batter currently at the plate. */
   thisPlateAppearance: boolean;
+  /** Who was in the box. Lets a hitter carry his own book across at-bats. */
+  batterId: string;
 }
 
 export interface Guess {
@@ -136,11 +144,41 @@ export interface Guess {
   aggression: number;
   /** Velocity the hitter's timing is geared to. */
   expectedVelo: number;
+  /**
+   * 0..1 how well this hitter knows you tonight. Climbs with every pitch he
+   * has personally seen, which is what makes the third time through the order
+   * the hardest part of a start.
+   */
+  familiarity: number;
+  /** How many times this hitter has come to the plate against you. */
+  timesFaced: number;
+}
+
+/** The leverage of the moment, and how much of it the pitcher actually feels. */
+export interface Situation {
+  /** 0..1 raw squeeze from runners, inning and outs. */
+  pressure: number;
+  /** 0..1 after composure blunts it. This is what actually bites. */
+  effective: number;
+  /** True when a runner is on second or third. */
+  risp: boolean;
+  /** True when any runner is on, so the pitcher works from the stretch. */
+  stretch: boolean;
+  /** Which trip through the order this hitter is on, 1-based. */
+  timesThroughOrder: number;
 }
 
 export type Bases = [boolean, boolean, boolean];
 
 export interface GameState {
+  /** The pitcher's usable pitches for this outing, already scaled by his ratings. */
+  arsenal: PitchType[];
+  /** The opposing order this outing. */
+  lineup: Batter[];
+  /** Stamina drained per pitch; better-conditioned arms drain slower. */
+  staminaPerPitch: number;
+  /** The pitcher's poise, 25–99. Decides how much of a jam he actually feels. */
+  composure: number;
   inning: number;
   outs: number;
   balls: number;

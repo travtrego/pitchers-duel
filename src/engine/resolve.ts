@@ -1,5 +1,5 @@
-import { breakMagnitude, getPitch } from './pitches';
-import type { Batter, Guess, Loc, MeterResult, PitcherState, PitchCall } from './types';
+import { breakMagnitude } from './pitches';
+import type { Batter, Guess, Loc, MeterResult, PitcherState, PitchType } from './types';
 import type { Rng } from './rng';
 import { clamp, clamp01, heartQuality, isStrike } from './zone';
 
@@ -10,6 +10,8 @@ export interface Execution {
   hung: boolean;
   /** Movement actually generated, after any power shortfall. */
   effectiveBreak: number;
+  /** The break the ball actually took, for the flight animation. */
+  liveBreak: Loc;
   inZone: boolean;
 }
 
@@ -22,16 +24,20 @@ export interface Execution {
  * and a curveball in the dirt are different mistakes with different prices.
  */
 export function executePitch(
-  call: PitchCall,
+  pitch: PitchType,
+  aim: Loc,
   meter: MeterResult,
   pitcher: PitcherState,
   rng: Rng,
 ): Execution {
-  const pitch = getPitch(call.pitchId);
-  const bMag = breakMagnitude(pitch);
+  // A knuckleball's break is rolled fresh every throw — that's the whole pitch.
+  const liveBreak: Loc = pitch.flutter
+    ? { x: rng.range(-1.2, 1.2), y: rng.range(-1.3, 0.3) }
+    : { ...pitch.break };
+  const bMag = pitch.flutter ? Math.hypot(liveBreak.x, liveBreak.y) : breakMagnitude(pitch);
 
   const fatigue = 1 + (1 - pitcher.stamina) * 0.95;
-  const aimDist = Math.hypot(call.aim.x, call.aim.y);
+  const aimDist = Math.hypot(aim.x, aim.y);
   // Reaching for a corner is harder to execute than working the middle.
   const reach = 1 + 0.3 * Math.max(0, aimDist - 1.2);
 
@@ -40,11 +46,18 @@ export function executePitch(
 
   // The side you stopped on decides which way you miss; the rest is spray.
   const side = meter.accuracyError >= 0 ? 1 : -1;
-  let x = call.aim.x + side * missMag * 0.75 + rng.normal() * missMag * 0.3;
-  let y = call.aim.y + rng.normal() * missMag * 0.62;
+  let x = aim.x + side * missMag * 0.75 + rng.normal() * missMag * 0.3;
+  let y = aim.y + rng.normal() * missMag * 0.62;
+
+  // The knuckleball's wander lands somewhere near the aim no matter how good
+  // the meter was — command of it is a contradiction in terms.
+  if (pitch.flutter) {
+    x += liveBreak.x * 0.45;
+    y += liveBreak.y * 0.45;
+  }
 
   const shortfall = clamp01(meter.powerError);
-  const hung = shortfall > 0.35 && bMag > 0.8;
+  const hung = !pitch.flutter && shortfall > 0.35 && bMag > 0.8;
   if (hung) {
     // A pitch without its power drifts back toward the middle and sits up.
     const drift = (shortfall - 0.35) * bMag * 0.62;
@@ -57,7 +70,7 @@ export function executePitch(
   const effectiveBreak = bMag * (1 - shortfall * 0.55);
 
   const actual = { x, y };
-  return { actual, velo, hung, effectiveBreak, inZone: isStrike(actual) };
+  return { actual, velo, hung, effectiveBreak, liveBreak, inZone: isStrike(actual) };
 }
 
 export type Trajectory = 'ground' | 'line' | 'fly' | 'popup';
@@ -84,16 +97,18 @@ export function timingError(
 export function whiffProbability(
   exec: Execution,
   batter: Batter,
-  pitchId: string,
+  pitch: PitchType,
   timing: number,
+  familiarity = 0,
 ): number {
-  const pitch = getPitch(pitchId);
   const locDifficulty = 1 - heartQuality(exec.actual);
   let p =
     pitch.whiff *
     (0.3 + 0.78 * timing) *
     (0.45 + 0.75 * locDifficulty) *
-    (1.2 - batter.contact * 0.62);
+    (1.2 - batter.contact * 0.62) *
+    // Swings and misses dry up as a hitter gets his third look at you.
+    (1 - familiarity * 0.22);
   if (!exec.inZone) p *= 1.3;
   if (exec.hung) p *= 0.45;
   return clamp(p, 0.02, 0.85);
@@ -103,15 +118,17 @@ export function whiffProbability(
 export function resolveContact(
   exec: Execution,
   batter: Batter,
-  pitchId: string,
+  pitch: PitchType,
   timing: number,
   rng: Rng,
+  familiarity = 0,
 ): ContactResult {
-  const pitch = getPitch(pitchId);
   let quality =
     (0.42 + 0.5 * batter.contact) *
     (1 - timing * 0.72) *
-    (0.45 + 0.62 * heartQuality(exec.actual));
+    (0.45 + 0.62 * heartQuality(exec.actual)) *
+    // A hitter on his third look is timing you, not reacting to you.
+    (1 + familiarity * 0.16);
   if (exec.hung) quality *= 1.35;
   quality = clamp01(quality + rng.normal() * 0.09);
 
